@@ -66,6 +66,16 @@ func endDataPrint(wordsize int64, donesize int64, elapsedTime time.Duration) {
 	fmt.Println("Recieved codes from :", donesize, "out of:", wordsize, "searches")
 	fmt.Println("Elapsed time:", elapsedTime)
 }
+
+func removeCharacters(input string, characters string) string {
+	filter := func(r rune) rune {
+		if strings.IndexRune(characters, r) < 0 {
+			return r
+		}
+		return -1
+	}
+	return strings.Map(filter, input)
+}
 func scanDict(filename string, keywords chan string, size *int64) chan error {
 	errc := make(chan error, 1)
 	file, err := os.Open(filename)
@@ -81,6 +91,7 @@ func scanDict(filename string, keywords chan string, size *int64) chan error {
 	close(keywords)
 	return errc
 }
+
 func errorPrintAndExit(err error) {
 	fmt.Println(err)
 	os.Exit(1)
@@ -92,6 +103,7 @@ func errorPrint(err error) {
 //Optimize
 func sendRequest(wg *sync.WaitGroup, url string, keyword string, extensions []string, data chan Response) error {
 	if strings.Contains(keyword, "%EXT%") {
+		keyword = removeCharacters(keyword, "%EXT%")
 		for _, ext := range extensions {
 			resp, err := http.Get(url + keyword + "." + ext)
 			if err != nil && strings.Contains(err.Error(), "connection refused") {
@@ -99,8 +111,9 @@ func sendRequest(wg *sync.WaitGroup, url string, keyword string, extensions []st
 				return err
 			}
 			data <- Response{url: resp.Request.URL.String(), code: resp.StatusCode, err: err}
-			wg.Done()
+
 		}
+		wg.Done()
 		return nil
 	}
 	resp, err := http.Get(url + keyword)

@@ -8,3 +8,5 @@ check
 cheburek
 calculator
 whatever
+lolka%EXT%
+yacalc
