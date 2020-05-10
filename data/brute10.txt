@@ -1,6 +1,10 @@
 user
 data
 admin
+login
+feed
+add
+search
 kek
 kok
 lol

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,12 +17,13 @@ import (
 
 var (
 	Cyan   = colorTerm.New(colorTerm.FgCyan)
+	Blue   = colorTerm.New(colorTerm.FgBlue)
 	Red    = colorTerm.New(colorTerm.FgRed)
 	Yellow = colorTerm.New(colorTerm.FgYellow)
 	Green  = colorTerm.New(colorTerm.FgGreen)
 )
 var colors = map[string]colorTerm.Color{
-	"cyan":   *Cyan,
+	"Blue":   *Blue,
 	"red":    *Red,
 	"yellow": *Yellow,
 	"green":  *Green,
@@ -45,16 +45,30 @@ func (ss *StringSlice) Set(val string) error {
 }
 
 type Response struct {
-	url  string
-	code int
-	err  error
+	url     string
+	code    int
+	size    int64
+	keyword string
+}
+
+func ByteCountIEC(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%3d   B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB",
+		float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 func (r *Response) Write() string {
-	if r.err != nil {
-		return r.url + " :: " + strconv.FormatInt(int64(r.code), 10) + "\n" + "::" + r.err.Error()
-	}
-	return r.url + " :: " + strconv.FormatInt(int64(r.code), 10) + "\n"
+	size := ByteCountIEC(r.size)
+	str := fmt.Sprintf("%s  ::  %3d  ::  %s  ->  %s\n", size, r.code, r.keyword, r.url)
+	return str
 }
 
 type CommonWriter struct {
@@ -62,8 +76,19 @@ type CommonWriter struct {
 	w         io.Writer
 }
 
-func (r *CommonWriter) WriteWithColor(color string) (int, error) {
+func (r *CommonWriter) WriteWithColors() (int, error) {
+	size := 0
+	tmp := 0
+	for response := range r.responses {
+		if response.code == 200 {
+			tmp, _ = Green.Fprint(r.w, response.Write())
 
+		} else {
+			tmp, _ = Cyan.Fprint(r.w, response.Write())
+		}
+		size += tmp
+	}
+	return size, nil
 }
 func (r *CommonWriter) Write(w []byte) (int, error) {
 	size := 0
@@ -76,21 +101,21 @@ func (r *CommonWriter) Write(w []byte) (int, error) {
 }
 
 func welcomeDataPrint(method string, gorutines int, target string, extensions []string) {
-	Red.Println("_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
+	Blue.Println("_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
 	fmt.Println()
-	Cyan.Print("HTTP Method: ")
+	Blue.Print("HTTP Method: ")
 	Green.Print(method)
 	Yellow.Print(" | ")
-	Cyan.Print("Gorutines: ")
+	Blue.Print("Gorutines: ")
 	Green.Print(gorutines)
 	Yellow.Print(" | ")
-	Cyan.Print("Extensions: ")
+	Blue.Print("Extensions: ")
 	Green.Println(strings.Join(extensions, " "))
 	fmt.Println()
-	Cyan.Print("Target: ")
+	Blue.Print("Target: ")
 	Green.Println(target)
 	fmt.Println()
-	Cyan.Println(":::Starting:::")
+	Blue.Println(":::Starting:::")
 	fmt.Println("+---------------+")
 
 }
@@ -134,28 +159,40 @@ func errorPrint(err error) {
 	fmt.Println(err)
 }
 
+func getRequestCustom(url string, keyword string) (Response, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return Response{}, err
+	}
+	res, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return Response{}, err
+	}
+	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: res.ContentLength}, nil
+}
+
 //Optimize
 func sendRequest(wg *sync.WaitGroup, url string, keyword string, extensions []string, data chan Response) error {
 	if strings.Contains(keyword, "%EXT%") {
 		keyword = removeCharacters(keyword, "%EXT%")
 		for _, ext := range extensions {
-			resp, err := http.Get(url + keyword + "." + ext)
+			resp, err := getRequestCustom(url+keyword+"."+ext, keyword+"."+ext)
 			if err != nil && strings.Contains(err.Error(), "connection refused") {
 				wg.Done()
 				return err
 			}
-			data <- Response{url: resp.Request.URL.String(), code: resp.StatusCode, err: err}
-
+			data <- resp
 		}
 		wg.Done()
 		return nil
 	}
-	resp, err := http.Get(url + keyword)
+	resp, err := getRequestCustom(url+keyword, keyword)
 	if err != nil && strings.Contains(err.Error(), "connection refused") {
 		wg.Done()
 		return err
 	}
-	data <- Response{url: resp.Request.URL.String(), code: resp.StatusCode, err: err}
+	data <- resp
+
 	wg.Done()
 	return nil
 }
@@ -207,7 +244,8 @@ func bruteWebSite(url string, dict string, extensions []string, power int, visua
 	}()
 	welcomeDataPrint("get", power, url, extensions)
 	cw := CommonWriter{responses: responses, w: os.Stdout}
-	fmt.Fprint(&cw)
+	// fmt.Fprint(&cw)
+	cw.WriteWithColors()
 	elapsedTime := time.Since(timer)
 	endDataPrint(size, tSize, elapsedTime)
 	return true
