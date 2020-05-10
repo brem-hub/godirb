@@ -6,7 +6,13 @@ import (
 	"os"
 )
 
-//TODO: add output file
+/*TODO: create output file
+change colors
+create recursion
+create bot
+create POST
+create log
+*/
 var (
 	url         = flag.String("u", "http://127.0.0.1:8000/", "url to bruteforce")
 	custom_dict = flag.Bool("cd", false, "use custom dictionary")

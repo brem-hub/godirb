@@ -16,11 +16,12 @@ import (
 )
 
 var (
-	Cyan   = colorTerm.New(colorTerm.FgCyan)
-	Blue   = colorTerm.New(colorTerm.FgBlue)
-	Red    = colorTerm.New(colorTerm.FgRed)
-	Yellow = colorTerm.New(colorTerm.FgYellow)
-	Green  = colorTerm.New(colorTerm.FgGreen)
+	Cyan    = colorTerm.New(colorTerm.FgCyan)
+	Blue    = colorTerm.New(colorTerm.FgBlue)
+	Red     = colorTerm.New(colorTerm.FgRed)
+	Yellow  = colorTerm.New(colorTerm.FgYellow)
+	Green   = colorTerm.New(colorTerm.FgGreen)
+	GreenBg = colorTerm.New(colorTerm.FgYellow, colorTerm.BgGreen)
 )
 var colors = map[string]colorTerm.Color{
 	"Blue":   *Blue,
@@ -67,7 +68,7 @@ func ByteCountIEC(b int64) string {
 
 func (r *Response) Write() string {
 	size := ByteCountIEC(r.size)
-	str := fmt.Sprintf("%s  ::  %3d  ::  %s  ->  %s\n", size, r.code, r.keyword, r.url)
+	str := fmt.Sprintf("%s  ::  %3d  ::  %s/  ->  %s", size, r.code, r.keyword, r.url)
 	return str
 }
 
@@ -80,11 +81,13 @@ func (r *CommonWriter) WriteWithColors() (int, error) {
 	size := 0
 	tmp := 0
 	for response := range r.responses {
-		if response.code == 200 {
-			tmp, _ = Green.Fprint(r.w, response.Write())
+		if response.code == 200 || response.code == 301 {
+			tmp, _ = GreenBg.Fprint(r.w, response.Write())
+			fmt.Println()
 
 		} else {
 			tmp, _ = Cyan.Fprint(r.w, response.Write())
+			fmt.Println()
 		}
 		size += tmp
 	}
@@ -103,25 +106,17 @@ func (r *CommonWriter) Write(w []byte) (int, error) {
 func welcomeDataPrint(method string, gorutines int, target string, extensions []string) {
 	Blue.Println("_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
 	fmt.Println()
-	Blue.Print("HTTP Method: ")
-	Green.Print(method)
-	Yellow.Print(" | ")
-	Blue.Print("Gorutines: ")
-	Green.Print(gorutines)
-	Yellow.Print(" | ")
-	Blue.Print("Extensions: ")
-	Green.Println(strings.Join(extensions, " "))
-	fmt.Println()
-	Blue.Print("Target: ")
-	Green.Println(target)
-	fmt.Println()
+	fmt.Printf("%s %s %s %s %s %s %s %s\n\n", Blue.Sprint("HTTP Method:"), Green.Sprint(method), Yellow.Sprint("|"),
+		Blue.Sprint("Gorutines:"), Green.Sprint(gorutines), Yellow.Sprint("|"),
+		Blue.Sprint("Extensions:"), Green.Sprint(strings.Join(extensions, " ")))
+	fmt.Printf("%s %s\n\n", Blue.Sprint("Target:"), Green.Sprint(target))
 	Blue.Println(":::Starting:::")
 	fmt.Println("+---------------+")
 
 }
 func endDataPrint(wordsize int64, donesize int64, elapsedTime time.Duration) {
 	fmt.Println("+---------------+")
-	fmt.Println(":::Completed:::")
+	Blue.Println(":::Completed:::")
 	fmt.Println("Recieved codes from :", donesize, "out of:", wordsize, "searches")
 	fmt.Println("Elapsed time:", elapsedTime)
 }
