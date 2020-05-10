@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,21 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+type StringSlice []string
+
+func (ss *StringSlice) String() string {
+	return strings.Join(*ss, " ")
+}
+func (ss *StringSlice) Set(val string) error {
+	if val == "" {
+		return errors.New("no extensions specified")
+	}
+	stringsSlice := strings.Split(val, ",")
+
+	*ss = append(*ss, stringsSlice...)
+	return nil
+}
 
 type Response struct {
 	url  string
@@ -72,7 +88,21 @@ func errorPrintAndExit(err error) {
 func errorPrint(err error) {
 	fmt.Println(err)
 }
-func sendRequest(wg *sync.WaitGroup, url string, keyword string, data chan Response) error {
+
+//Optimize
+func sendRequest(wg *sync.WaitGroup, url string, keyword string, extensions []string, data chan Response) error {
+	if strings.Contains(keyword, "%EXT%") {
+		for _, ext := range extensions {
+			resp, err := http.Get(url + keyword + "." + ext)
+			if err != nil && strings.Contains(err.Error(), "connection refused") {
+				wg.Done()
+				return err
+			}
+			data <- Response{url: resp.Request.URL.String(), code: resp.StatusCode, err: err}
+			wg.Done()
+		}
+		return nil
+	}
 	resp, err := http.Get(url + keyword)
 	if err != nil && strings.Contains(err.Error(), "connection refused") {
 		wg.Done()
@@ -80,14 +110,14 @@ func sendRequest(wg *sync.WaitGroup, url string, keyword string, data chan Respo
 	}
 	data <- Response{url: resp.Request.URL.String(), code: resp.StatusCode, err: err}
 	wg.Done()
-	return err
+	return nil
 }
 
-func sendRequestWorker(wg *sync.WaitGroup, url string, keywords chan string, data chan Response, size *int64) {
+func sendRequestWorker(wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
 	var wgLocal sync.WaitGroup
 	for keyword := range keywords {
 		wgLocal.Add(1)
-		err := sendRequest(&wgLocal, url, keyword, data)
+		err := sendRequest(&wgLocal, url, keyword, extensions, data)
 		if err != nil && strings.Contains(err.Error(), "connection refused") {
 			fmt.Println(url+keyword, "::", "connection refused")
 			wg.Done()
@@ -98,23 +128,17 @@ func sendRequestWorker(wg *sync.WaitGroup, url string, keywords chan string, dat
 	wg.Done()
 }
 
-func bruteWebSite(url string, dict string, power int, visual bool) bool {
+func bruteWebSite(url string, dict string, extensions []string, power int, visual bool) bool {
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
-	/*
-		Не сработает, если много слов, потому что уже начнётся sendRequest() и, если не начать выводить
-			инфу сразу по получении данных из канала responses, то первые ответы начнут теряться, поэтому нельзя ждать
-			до конца
-	*/
 	var size int64
 	var tSize int64
 	var tSizeP *int64
 	var sizeP *int64
-	size = 0
 	sizeP = &size
 	tSizeP = &tSize
 
-	power = power * 10
+	power *= 10
 	timer := time.Now()
 
 	go func() {
@@ -128,7 +152,7 @@ func bruteWebSite(url string, dict string, power int, visual bool) bool {
 	var wg sync.WaitGroup
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go sendRequestWorker(&wg, url, keywords, responses, tSizeP)
+		go sendRequestWorker(&wg, url, keywords, extensions, responses, tSizeP)
 	}
 	go func() {
 		wg.Wait()
