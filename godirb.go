@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type Response struct {
 	url  string
 	code int
+	err  error
 }
 
 func (r *Response) Write() string {
@@ -32,27 +36,26 @@ func (r *CommonWriter) Write(w []byte) (int, error) {
 }
 
 func welcomeDataPrint(method string, gorutines int, target string) {
-	fmt.Println(" _|. _ _  _  _  _ _|_\n(_||| _) (/_(_|| (_| )\n[logo officually stolen from original dirbsearch]")
+	fmt.Println(" _|. _ _  _  _  _ _|_\n(_||| _) (/_(_|| (_| )\n[logo is used from original dirbsearch]")
 	fmt.Println("Method:", method, "|", "Gorutines:", gorutines)
 	fmt.Println("Target:", target)
 	fmt.Println()
-	fmt.Println("Starting")
-}
-func (r Response) printResponse(deep int) {
-	switch deep {
-	case 1:
-		fmt.Println(r.url, ": ", r.code)
-	case 2:
-		if r.code == 404 {
-			fmt.Println(r.url, ": ", r.code)
-		}
-	}
-}
+	fmt.Println(":::Starting:::")
+	fmt.Println("+---------------+")
 
-func scanDict(filename string, keywords chan string, size *int64) {
+}
+func endDataPrint(wordsize int64, donesize int64, elapsedTime time.Duration) {
+	fmt.Println("+---------------+")
+	fmt.Println(":::Completed:::")
+	fmt.Println("Recieved codes from :", donesize, "out of:", wordsize, "searches")
+	fmt.Println("Elapsed time:", elapsedTime)
+}
+func scanDict(filename string, keywords chan string, size *int64) chan error {
+	errc := make(chan error, 1)
 	file, err := os.Open(filename)
+	errc <- err
 	if err != nil {
-		fmt.Println(err)
+		return errc
 	}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -60,47 +63,81 @@ func scanDict(filename string, keywords chan string, size *int64) {
 		*size++
 	}
 	close(keywords)
+	return errc
+}
+func errorPrintAndExit(err error) {
+	fmt.Println(err)
+	os.Exit(1)
+}
+func errorPrint(err error) {
+	fmt.Println(err)
+}
+func sendRequest(wg *sync.WaitGroup, url string, keyword string, data chan Response) error {
+	resp, err := http.Get(url + keyword)
+	if err != nil && strings.Contains(err.Error(), "connection refused") {
+		wg.Done()
+		return err
+	}
+	data <- Response{url: resp.Request.URL.String(), code: resp.StatusCode, err: err}
+	wg.Done()
+	return err
 }
 
-func sendRequest(wg *sync.WaitGroup, url string, keyword string, data chan Response) {
-	resp, err := http.Get(url + keyword)
-	if err != nil {
-		wg.Done()
-		return
+func sendRequestWorker(wg *sync.WaitGroup, url string, keywords chan string, data chan Response, size *int64) {
+	var wgLocal sync.WaitGroup
+	for keyword := range keywords {
+		wgLocal.Add(1)
+		err := sendRequest(&wgLocal, url, keyword, data)
+		if err != nil && strings.Contains(err.Error(), "connection refused") {
+			fmt.Println(url+keyword, "::", "connection refused")
+			wg.Done()
+			return
+		}
+		atomic.AddInt64(size, 1)
 	}
-	data <- Response{url: resp.Request.URL.String(), code: resp.StatusCode}
 	wg.Done()
 }
 
-func bruteWebSite(url string, dict string, visual bool) bool {
+func bruteWebSite(url string, dict string, power int, visual bool) bool {
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
-	/* Is needed to print size of word_count
-	Не сработает, если много слов, потому что уже начнётся sendRequest() и, если не начать выводить
-		инфу сразу по получении данных из канала responses, то первые ответы начнут теряться, поэтому нельзя ждать
-		до конца
-	НЕЛЬЗЯ ВЫВЕСТИ SIZE в начале, т.к неизвестно кол-во слов
+	/*
+		Не сработает, если много слов, потому что уже начнётся sendRequest() и, если не начать выводить
+			инфу сразу по получении данных из канала responses, то первые ответы начнут теряться, поэтому нельзя ждать
+			до конца
 	*/
 	var size int64
+	var tSize int64
+	var tSizeP *int64
 	var sizeP *int64
 	size = 0
 	sizeP = &size
+	tSizeP = &tSize
 
-	go scanDict(dict, keywords, sizeP)
+	power = power * 10
+	timer := time.Now()
+
+	go func() {
+		errc := scanDict(dict, keywords, sizeP)
+		err := <-errc
+		if err != nil {
+			errorPrintAndExit(err)
+		}
+	}()
 
 	var wg sync.WaitGroup
-	for keyword := range keywords {
+	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go sendRequest(&wg, url, keyword, responses)
+		go sendRequestWorker(&wg, url, keywords, responses, tSizeP)
 	}
 	go func() {
 		wg.Wait()
 		close(responses)
 	}()
-	// Кол-во горутин зависит от мощности поиска, который задаётся флагом, по дефолту 10-20 горутин
-	welcomeDataPrint("get", 10, url)
+	welcomeDataPrint("get", power, url)
 	cw := CommonWriter{responses: responses, w: os.Stdout}
 	fmt.Fprint(&cw)
-
+	elapsedTime := time.Since(timer)
+	endDataPrint(size, tSize, elapsedTime)
 	return true
 }
