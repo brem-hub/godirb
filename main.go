@@ -16,7 +16,17 @@ var (
 )
 
 func main() {
-	// welcomeDataPrint("get", 10, 100, "google.com")
+	// resp := Response{url: "124.com", code: 404}
+	// resp2 := Response{url: "123.com", code: 200}
+	// resp3 := Response{url: "122.com", code: 303}
+	// cwR := make(chan Response, 3)
+	// cw := CommonWriter{responses: cwR, w: os.Stdout}
+	// cwR <- resp
+	// cwR <- resp2
+	// cwR <- resp3
+	// close(cwR)
+	// fmt.Fprint(&cw)
+
 	flag.Parse()
 	if *custom_dict {
 		if *dict_path == "" {
@@ -27,7 +37,7 @@ func main() {
 	} else {
 		switch *depth {
 		case 10:
-			bruteWebSite(*url, "data/brute10.txt", *visual)
+			bruteWebSite(*url, "data/dicc.txt", *visual)
 		case 100:
 			bruteWebSite(*url, "data/brute100.txt", *visual)
 		case 1000:
