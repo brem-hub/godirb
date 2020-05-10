@@ -12,7 +12,22 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	colorTerm "github.com/fatih/color"
 )
+
+var (
+	Cyan   = colorTerm.New(colorTerm.FgCyan)
+	Red    = colorTerm.New(colorTerm.FgRed)
+	Yellow = colorTerm.New(colorTerm.FgYellow)
+	Green  = colorTerm.New(colorTerm.FgGreen)
+)
+var colors = map[string]colorTerm.Color{
+	"cyan":   *Cyan,
+	"red":    *Red,
+	"yellow": *Yellow,
+	"green":  *Green,
+}
 
 type StringSlice []string
 
@@ -36,6 +51,9 @@ type Response struct {
 }
 
 func (r *Response) Write() string {
+	if r.err != nil {
+		return r.url + " :: " + strconv.FormatInt(int64(r.code), 10) + "\n" + "::" + r.err.Error()
+	}
 	return r.url + " :: " + strconv.FormatInt(int64(r.code), 10) + "\n"
 }
 
@@ -44,19 +62,35 @@ type CommonWriter struct {
 	w         io.Writer
 }
 
+func (r *CommonWriter) WriteWithColor(color string) (int, error) {
+
+}
 func (r *CommonWriter) Write(w []byte) (int, error) {
+	size := 0
 	for response := range r.responses {
-		r.w.Write([]byte(response.Write()))
+		data := []byte(response.Write())
+		r.w.Write(data)
+		size += len(data)
 	}
-	return 1, nil
+	return size, nil
 }
 
-func welcomeDataPrint(method string, gorutines int, target string) {
-	fmt.Println(" _|. _ _  _  _  _ _|_\n(_||| _) (/_(_|| (_| )\n[logo is used from original dirbsearch]")
-	fmt.Println("Method:", method, "|", "Gorutines:", gorutines)
-	fmt.Println("Target:", target)
+func welcomeDataPrint(method string, gorutines int, target string, extensions []string) {
+	Red.Println("_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
 	fmt.Println()
-	fmt.Println(":::Starting:::")
+	Cyan.Print("HTTP Method: ")
+	Green.Print(method)
+	Yellow.Print(" | ")
+	Cyan.Print("Gorutines: ")
+	Green.Print(gorutines)
+	Yellow.Print(" | ")
+	Cyan.Print("Extensions: ")
+	Green.Println(strings.Join(extensions, " "))
+	fmt.Println()
+	Cyan.Print("Target: ")
+	Green.Println(target)
+	fmt.Println()
+	Cyan.Println(":::Starting:::")
 	fmt.Println("+---------------+")
 
 }
@@ -171,7 +205,7 @@ func bruteWebSite(url string, dict string, extensions []string, power int, visua
 		wg.Wait()
 		close(responses)
 	}()
-	welcomeDataPrint("get", power, url)
+	welcomeDataPrint("get", power, url, extensions)
 	cw := CommonWriter{responses: responses, w: os.Stdout}
 	fmt.Fprint(&cw)
 	elapsedTime := time.Since(timer)
