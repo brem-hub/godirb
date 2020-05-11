@@ -34,6 +34,6 @@ func main() {
 		}
 		bruteWebSite(*url, *dict_path, extensions, *power, *verbose)
 	} else {
-		bruteWebSite(*url, "data/dicc.txt", extensions, 2, *verbose)
+		bruteWebSite(*url, "data/dicc.txt", extensions, *power, *verbose)
 	}
 }

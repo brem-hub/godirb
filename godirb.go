@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,12 +18,13 @@ import (
 )
 
 var (
-	Cyan    = colorTerm.New(colorTerm.FgCyan)
-	Blue    = colorTerm.New(colorTerm.FgBlue)
-	Red     = colorTerm.New(colorTerm.FgRed)
-	Yellow  = colorTerm.New(colorTerm.FgYellow)
-	Green   = colorTerm.New(colorTerm.FgGreen)
-	GreenBg = colorTerm.New(colorTerm.FgYellow, colorTerm.BgGreen)
+	Cyan     = colorTerm.New(colorTerm.FgCyan)
+	Blue     = colorTerm.New(colorTerm.FgBlue)
+	Red      = colorTerm.New(colorTerm.FgRed)
+	Yellow   = colorTerm.New(colorTerm.FgYellow)
+	Green    = colorTerm.New(colorTerm.FgGreen)
+	GreenBg  = colorTerm.New(colorTerm.FgYellow, colorTerm.BgGreen)
+	RedWhite = colorTerm.New(colorTerm.FgWhite, colorTerm.BgRed)
 )
 
 var colors = map[int]*colorTerm.Color{
@@ -78,26 +81,33 @@ type CommonWriter struct {
 	w         io.Writer
 }
 
-func (r *CommonWriter) writeWithColors(verbose bool) (int, error) {
+func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, error) {
 	size := 0
 	tmp := 0
 	for response := range r.responses {
-		var color *colorTerm.Color
-		if _, ok := colors[response.code]; !ok {
-			color = Cyan
-		} else {
-			color = colors[response.code]
-		}
-		if verbose {
-			color.Fprint(r.w, response.Write())
-			fmt.Println()
-		} else {
-			if response.code != 404 {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(r.w)
+			return size, nil
+		default:
+			var color *colorTerm.Color
+			if _, ok := colors[response.code]; !ok {
+				color = Cyan
+			} else {
+				color = colors[response.code]
+			}
+			if verbose {
 				color.Fprint(r.w, response.Write())
 				fmt.Println()
-				size += tmp
+			} else {
+				if response.code != 404 {
+					color.Fprint(r.w, response.Write())
+					fmt.Println()
+					size += tmp
+				}
 			}
 		}
+
 	}
 	return size, nil
 }
@@ -136,7 +146,7 @@ func removeCharacters(input string, characters string) string {
 	}
 	return strings.Map(filter, input)
 }
-func scanDict(filename string, keywords chan string, size *int64) chan error {
+func scanDict(ctx context.Context, filename string, keywords chan string, size *int64) chan error {
 	errc := make(chan error, 1)
 	file, err := os.Open(filename)
 	errc <- err
@@ -145,8 +155,14 @@ func scanDict(filename string, keywords chan string, size *int64) chan error {
 	}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		keywords <- scanner.Text()
-		*size++
+		select {
+		case <-ctx.Done():
+			close(keywords)
+			return errc
+		default:
+			keywords <- scanner.Text()
+			*size++
+		}
 	}
 	close(keywords)
 	return errc
@@ -171,46 +187,92 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: res.ContentLength}, nil
 }
 
-func sendRequest(wg *sync.WaitGroup, url string, keyword string, extensions []string, data chan Response) error {
+func sendRequest(url string, keyword string, extensions []string, data chan Response) error {
 	if strings.Contains(keyword, "%EXT%") {
 		keyword = removeCharacters(keyword, "%EXT%")
 		for _, ext := range extensions {
 			resp, err := getRequestCustom(url+keyword+"."+ext, keyword+"."+ext)
 			if err != nil && strings.Contains(err.Error(), "connection refused") {
-				wg.Done()
-				return err
+				return errors.New(resp.url + " :: connection refused")
 			}
 			data <- resp
 		}
-		wg.Done()
 		return nil
 	}
 	resp, err := getRequestCustom(url+keyword, keyword)
 	if err != nil && strings.Contains(err.Error(), "connection refused") {
-		wg.Done()
-		return err
+		return errors.New(url + keyword + " :: connection refused")
+
 	}
 	data <- resp
 
-	wg.Done()
 	return nil
 }
 
-func requestWorker(wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
-	var wgLocal sync.WaitGroup
+//??? Why it doesn`t stop when connection refused is sent
+func requestWorker(ctx context.Context, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
+	// flag := false
+	// for {
+	// 	errc := make(chan error, 1)
+	// 	select {
+	// 	case keyword, ok := <-keywords:
+	// 		go sendRequest(url, keyword, extensions, data)
+	// 		if !ok {
+	// 			fmt.Println("EDEDEEEEEDDDE")
+	// 			keywords = nil
+	// 		}
+	// 	case err := <-errc:
+	// 		fmt.Println(err)
+	// 		wg.Done()
+	// 		return
+	// 	}
+	// 	if flag {
+	// 		wg.Done()
+	// 		return
+	// 	}
+
 	for keyword := range keywords {
-		wgLocal.Add(1)
-		err := sendRequest(&wgLocal, url, keyword, extensions, data)
-		if err != nil && strings.Contains(err.Error(), "connection refused") {
-			fmt.Println(url+keyword, "::", "connection refused")
+		select {
+		case <-ctx.Done():
 			wg.Done()
 			return
+		default:
+			err := sendRequest(url, keyword, extensions, data)
+			if err != nil {
+				fmt.Println(err)
+				break
+			}
+			atomic.AddInt64(size, 1)
 		}
-		atomic.AddInt64(size, 1)
 	}
 	wg.Done()
 }
 
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+	var wg sync.WaitGroup
+
+	go func() {
+		errc := scanDict(ctx, dict, keywords, sizeP)
+		err := <-errc
+		if err != nil {
+			errorPrintAndExit(err)
+		}
+	}()
+
+	for grNum := 0; grNum < power; grNum++ {
+		wg.Add(1)
+		go requestWorker(ctx, &wg, url, keywords, extensions, responses, tSizeP)
+	}
+	go func() {
+		<-interrupt
+		cancel()
+		RedWhite.Print("USER CANCEL")
+	}()
+	go func() {
+		wg.Wait()
+		close(responses)
+	}()
+}
 func bruteWebSite(url string, dict string, extensions []string, power int, verbose bool) bool {
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
@@ -221,29 +283,19 @@ func bruteWebSite(url string, dict string, extensions []string, power int, verbo
 	sizeP = &size
 	tSizeP = &tSize
 
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+
 	power *= 10
 	timer := time.Now()
 
-	go func() {
-		errc := scanDict(dict, keywords, sizeP)
-		err := <-errc
-		if err != nil {
-			errorPrintAndExit(err)
-		}
-	}()
+	workerLauncher(ctx, cancel, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
 
-	var wg sync.WaitGroup
-	for grNum := 0; grNum < power; grNum++ {
-		wg.Add(1)
-		go requestWorker(&wg, url, keywords, extensions, responses, tSizeP)
-	}
-	go func() {
-		wg.Wait()
-		close(responses)
-	}()
 	welcomeDataPrint("get", power, url, extensions)
 	cw := CommonWriter{responses: responses, w: os.Stdout}
-	cw.writeWithColors(verbose)
+	cw.writeWithColors(ctx, verbose)
 	elapsedTime := time.Since(timer)
 	endDataPrint(size, tSize, elapsedTime)
 	return true
