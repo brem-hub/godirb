@@ -121,21 +121,21 @@ func (r *CommonWriter) Write(w []byte) (int, error) {
 	return size, nil
 }
 
-func welcomeDataPrint(method string, gorutines int, target string, extensions []string) {
-	Blue.Println("_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
-	fmt.Println()
-	fmt.Printf("%s %s %s %s %s %s %s %s\n\n", Blue.Sprint("HTTP Method:"), Green.Sprint(method), Yellow.Sprint("|"),
+func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, extensions []string) {
+	Blue.Fprintln(w, "_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s %s %s %s %s %s %s %s\n\n", Blue.Sprint("HTTP Method:"), Green.Sprint(method), Yellow.Sprint("|"),
 		Blue.Sprint("Gorutines:"), Green.Sprint(gorutines), Yellow.Sprint("|"),
 		Blue.Sprint("Extensions:"), Green.Sprint(strings.Join(extensions, " ")))
-	fmt.Printf("%s %s\n\n", Blue.Sprint("Target:"), Green.Sprint(target))
-	Blue.Println(":::Starting:::")
-	fmt.Println("+---------------+")
+	fmt.Fprintf(w, "%s %s\n\n", Blue.Sprint("Target:"), Green.Sprint(target))
+	Blue.Fprintln(w, ":::Starting:::")
+	fmt.Fprintln(w, "+---------------+")
 }
-func endDataPrint(wordsize int64, donesize int64, elapsedTime time.Duration) {
-	fmt.Println("+---------------+")
-	Blue.Println(":::Completed:::")
-	fmt.Println("Recieved codes from :", donesize, "out of:", wordsize, "searches")
-	fmt.Println("Elapsed time:", elapsedTime)
+func endDataPrint(w io.Writer, wordsize int64, donesize int64, elapsedTime time.Duration) {
+	fmt.Fprintln(w, "+---------------+")
+	Blue.Fprintln(w, ":::Completed:::")
+	fmt.Fprintln(w, "Recieved codes from :", donesize, "out of:", wordsize, "searches")
+	fmt.Fprintln(w, "Elapsed time:", elapsedTime)
 }
 func removeCharacters(input string, characters string) string {
 	filter := func(r rune) rune {
@@ -277,7 +277,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, url string, 
 		close(responses)
 	}()
 }
-func bruteWebSite(url string, dict string, extensions []string, method string, power int, verbose bool) bool {
+func bruteWebSite(url string, dict string, extensions []string, method string, power int, verbose bool, w io.Writer) bool {
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
 	var size int64
@@ -294,12 +294,12 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 
 	power *= 10
 	timer := time.Now()
-	cw := CommonWriter{responses: responses, w: os.Stdout}
+	cw := CommonWriter{responses: responses, w: w}
 
 	workerLauncher(ctx, cancel, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
-	welcomeDataPrint(method, power, url, extensions)
+	welcomeDataPrint(w, method, power, url, extensions)
 	cw.writeWithColors(ctx, verbose)
-	endDataPrint(size, tSize, time.Since(timer))
+	endDataPrint(w, size, tSize, time.Since(timer))
 
 	return true
 }

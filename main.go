@@ -21,11 +21,13 @@ var (
 	dict_path   = flag.String("d", "", "custom dictionary path")
 	verbose     = flag.Bool("v", false, "more output")
 	method      = flag.String("m", "get", "specify method to use [get, post]")
+	file        = flag.String("f", "", "specify file to write to ")
 	power       = flag.Int("p", 1, "Amount of Goroutines X10. Normal usage: [1 ... 5]")
 	extensions  StringSlice
 )
 
 func main() {
+	dict := "data/dicc.txt"
 	flag.Var(&extensions, "e", "extensions to pass. Usage: -e=php,txt,rcc")
 	flag.Parse()
 	if *custom_dict {
@@ -33,8 +35,18 @@ func main() {
 			fmt.Println("specify custom dictionary path")
 			os.Exit(1)
 		}
-		bruteWebSite(*url, *dict_path, extensions, *method, *power, *verbose)
+		dict = *dict_path
+
+	}
+	if *file == "" {
+		bruteWebSite(*url, dict, extensions, *method, *power, *verbose, os.Stdout)
 	} else {
-		bruteWebSite(*url, "data/dicc.txt", extensions, *method, *power, *verbose)
+		file, err := os.Create(*file)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		bruteWebSite(*url, dict, extensions, *method, *power, *verbose, file)
+
 	}
 }
