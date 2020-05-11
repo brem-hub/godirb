@@ -23,11 +23,12 @@ var (
 	Green   = colorTerm.New(colorTerm.FgGreen)
 	GreenBg = colorTerm.New(colorTerm.FgYellow, colorTerm.BgGreen)
 )
-var colors = map[string]colorTerm.Color{
-	"Blue":   *Blue,
-	"red":    *Red,
-	"yellow": *Yellow,
-	"green":  *Green,
+
+var colors = map[int]*colorTerm.Color{
+	404: Cyan,
+	200: GreenBg,
+	301: GreenBg,
+	302: GreenBg,
 }
 
 type StringSlice []string
@@ -68,7 +69,7 @@ func ByteCountIEC(b int64) string {
 
 func (r *Response) Write() string {
 	size := ByteCountIEC(r.size)
-	str := fmt.Sprintf("%s  ::  %3d  ::  %s/  ->  %s", size, r.code, r.keyword, r.url)
+	str := fmt.Sprintf("%s  ::  %3d  ::  /%s/  ->  %s", size, r.code, r.keyword, r.url)
 	return str
 }
 
@@ -77,19 +78,26 @@ type CommonWriter struct {
 	w         io.Writer
 }
 
-func (r *CommonWriter) WriteWithColors() (int, error) {
+func (r *CommonWriter) writeWithColors(verbose bool) (int, error) {
 	size := 0
 	tmp := 0
 	for response := range r.responses {
-		if response.code == 200 || response.code == 301 {
-			tmp, _ = GreenBg.Fprint(r.w, response.Write())
-			fmt.Println()
-
+		var color *colorTerm.Color
+		if _, ok := colors[response.code]; !ok {
+			color = Cyan
 		} else {
-			tmp, _ = Cyan.Fprint(r.w, response.Write())
-			fmt.Println()
+			color = colors[response.code]
 		}
-		size += tmp
+		if verbose {
+			color.Fprint(r.w, response.Write())
+			fmt.Println()
+		} else {
+			if response.code != 404 {
+				color.Fprint(r.w, response.Write())
+				fmt.Println()
+				size += tmp
+			}
+		}
 	}
 	return size, nil
 }
@@ -112,7 +120,6 @@ func welcomeDataPrint(method string, gorutines int, target string, extensions []
 	fmt.Printf("%s %s\n\n", Blue.Sprint("Target:"), Green.Sprint(target))
 	Blue.Println(":::Starting:::")
 	fmt.Println("+---------------+")
-
 }
 func endDataPrint(wordsize int64, donesize int64, elapsedTime time.Duration) {
 	fmt.Println("+---------------+")
@@ -120,7 +127,6 @@ func endDataPrint(wordsize int64, donesize int64, elapsedTime time.Duration) {
 	fmt.Println("Recieved codes from :", donesize, "out of:", wordsize, "searches")
 	fmt.Println("Elapsed time:", elapsedTime)
 }
-
 func removeCharacters(input string, characters string) string {
 	filter := func(r rune) rune {
 		if strings.IndexRune(characters, r) < 0 {
@@ -145,7 +151,6 @@ func scanDict(filename string, keywords chan string, size *int64) chan error {
 	close(keywords)
 	return errc
 }
-
 func errorPrintAndExit(err error) {
 	fmt.Println(err)
 	os.Exit(1)
@@ -166,7 +171,6 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: res.ContentLength}, nil
 }
 
-//Optimize
 func sendRequest(wg *sync.WaitGroup, url string, keyword string, extensions []string, data chan Response) error {
 	if strings.Contains(keyword, "%EXT%") {
 		keyword = removeCharacters(keyword, "%EXT%")
@@ -192,7 +196,7 @@ func sendRequest(wg *sync.WaitGroup, url string, keyword string, extensions []st
 	return nil
 }
 
-func sendRequestWorker(wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
+func requestWorker(wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
 	var wgLocal sync.WaitGroup
 	for keyword := range keywords {
 		wgLocal.Add(1)
@@ -207,7 +211,7 @@ func sendRequestWorker(wg *sync.WaitGroup, url string, keywords chan string, ext
 	wg.Done()
 }
 
-func bruteWebSite(url string, dict string, extensions []string, power int, visual bool) bool {
+func bruteWebSite(url string, dict string, extensions []string, power int, verbose bool) bool {
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
 	var size int64
@@ -231,7 +235,7 @@ func bruteWebSite(url string, dict string, extensions []string, power int, visua
 	var wg sync.WaitGroup
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go sendRequestWorker(&wg, url, keywords, extensions, responses, tSizeP)
+		go requestWorker(&wg, url, keywords, extensions, responses, tSizeP)
 	}
 	go func() {
 		wg.Wait()
@@ -239,8 +243,7 @@ func bruteWebSite(url string, dict string, extensions []string, power int, visua
 	}()
 	welcomeDataPrint("get", power, url, extensions)
 	cw := CommonWriter{responses: responses, w: os.Stdout}
-	// fmt.Fprint(&cw)
-	cw.WriteWithColors()
+	cw.writeWithColors(verbose)
 	elapsedTime := time.Since(timer)
 	endDataPrint(size, tSize, elapsedTime)
 	return true
