@@ -264,16 +264,20 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, url string, 
 		go requestWorker(ctx, &wg, url, keywords, extensions, responses, tSizeP)
 	}
 	go func() {
-		<-interrupt
-		cancel()
-		RedWhite.Print("USER CANCEL")
+		for range interrupt {
+			cancel()
+			// To remove C^
+			fmt.Print("\r \r")
+			RedWhite.Print("Canceled by user")
+		}
+
 	}()
 	go func() {
 		wg.Wait()
 		close(responses)
 	}()
 }
-func bruteWebSite(url string, dict string, extensions []string, power int, verbose bool) bool {
+func bruteWebSite(url string, dict string, extensions []string, method string, power int, verbose bool) bool {
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
 	var size int64
@@ -290,13 +294,12 @@ func bruteWebSite(url string, dict string, extensions []string, power int, verbo
 
 	power *= 10
 	timer := time.Now()
+	cw := CommonWriter{responses: responses, w: os.Stdout}
 
 	workerLauncher(ctx, cancel, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
-
-	welcomeDataPrint("get", power, url, extensions)
-	cw := CommonWriter{responses: responses, w: os.Stdout}
+	welcomeDataPrint(method, power, url, extensions)
 	cw.writeWithColors(ctx, verbose)
-	elapsedTime := time.Since(timer)
-	endDataPrint(size, tSize, elapsedTime)
+	endDataPrint(size, tSize, time.Since(timer))
+
 	return true
 }
