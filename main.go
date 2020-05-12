@@ -7,7 +7,7 @@ import (
 )
 
 /*TODO:
-create output file
+create output file#
 change colors#
 change dicts#
 create recursion?

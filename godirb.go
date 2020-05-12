@@ -118,20 +118,9 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 				}
 			}
 		}
-
 	}
 	return size, nil
 }
-
-// func (r *CommonWriter) Write(w []byte) (int, error) {
-// 	size := 0
-// 	for response := range r.responses {
-// 		data := []byte(response.Write())
-// 		r.w.Write(data)
-// 		size += len(data)
-// 	}
-// 	return size, nil
-// }
 
 func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, extensions []string) {
 	Blue.Fprintln(w, "_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
@@ -311,8 +300,10 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	power *= 10
 	timer := time.Now()
 	cw := CommonWriter{responses: responses, w: w}
-	checkColors(w)
+
 	workerLauncher(ctx, cancel, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
+
+	checkColors(w)
 	welcomeDataPrint(w, method, power, url, extensions)
 	cw.writeWithColors(ctx, verbose)
 	endDataPrint(w, size, tSize, time.Since(timer))
