@@ -34,6 +34,17 @@ var colors = map[int]*colorTerm.Color{
 	302: GreenBg,
 }
 
+func checkColors(w io.Writer) {
+	if w != os.Stdout {
+		Cyan.DisableColor()
+		Blue.DisableColor()
+		Red.DisableColor()
+		Yellow.DisableColor()
+		Green.DisableColor()
+		GreenBg.DisableColor()
+	}
+}
+
 type StringSlice []string
 
 func (ss *StringSlice) String() string {
@@ -98,11 +109,11 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 			}
 			if verbose {
 				color.Fprint(r.w, response.Write())
-				fmt.Println()
+				fmt.Fprintln(r.w)
 			} else {
 				if response.code != 404 {
 					color.Fprint(r.w, response.Write())
-					fmt.Println()
+					fmt.Fprintln(r.w)
 					size += tmp
 				}
 			}
@@ -111,15 +122,16 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 	}
 	return size, nil
 }
-func (r *CommonWriter) Write(w []byte) (int, error) {
-	size := 0
-	for response := range r.responses {
-		data := []byte(response.Write())
-		r.w.Write(data)
-		size += len(data)
-	}
-	return size, nil
-}
+
+// func (r *CommonWriter) Write(w []byte) (int, error) {
+// 	size := 0
+// 	for response := range r.responses {
+// 		data := []byte(response.Write())
+// 		r.w.Write(data)
+// 		size += len(data)
+// 	}
+// 	return size, nil
+// }
 
 func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, extensions []string) {
 	Blue.Fprintln(w, "_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
@@ -248,7 +260,7 @@ func requestWorker(ctx context.Context, wg *sync.WaitGroup, url string, keywords
 	wg.Done()
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 
 	go func() {
@@ -268,7 +280,11 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, url string, 
 			cancel()
 			// To remove C^
 			fmt.Print("\r \r")
-			RedWhite.Print("Canceled by user")
+			if w != os.Stdout {
+				fmt.Fprint(w, ":::Canceled by user:::")
+			}
+			RedWhite.Fprint(os.Stdout, "Canceled by user")
+
 		}
 
 	}()
@@ -295,8 +311,8 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	power *= 10
 	timer := time.Now()
 	cw := CommonWriter{responses: responses, w: w}
-
-	workerLauncher(ctx, cancel, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
+	checkColors(w)
+	workerLauncher(ctx, cancel, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
 	welcomeDataPrint(w, method, power, url, extensions)
 	cw.writeWithColors(ctx, verbose)
 	endDataPrint(w, size, tSize, time.Since(timer))

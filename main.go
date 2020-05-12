@@ -6,10 +6,11 @@ import (
 	"os"
 )
 
-/*TODO: create output file
+/*TODO:
+create output file
 change colors#
 change dicts#
-create recursion
+create recursion?
 create bot
 create POST
 create log
