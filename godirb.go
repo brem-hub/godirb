@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	URL "net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -87,6 +89,22 @@ func (r *Response) Write() string {
 	return str
 }
 
+func createLogger(website string) (*log.Logger, *os.File) {
+	file, err := os.Create(fmt.Sprintf("log/log_%s", website))
+	if err != nil {
+		fmt.Println(err)
+		return nil, nil
+	}
+	logger := log.New(file, "", 0)
+	logger.Println("Started logging")
+	return logger, file
+}
+
+func closeLogger(logger *log.Logger, file *os.File) {
+	logger.Println("Logging finished")
+	file.Close()
+}
+
 type CommonWriter struct {
 	responses chan Response
 	w         io.Writer
@@ -123,6 +141,9 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 }
 
 func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, extensions []string) {
+	if len(extensions) == 0 {
+		extensions = append(extensions, "none")
+	}
 	Blue.Fprintln(w, "_________     _____________       ______\n__  ____/________  __ \\__(_)_________  /_\n_  / __ _  __ \\_  / / /_  /__  ___/_  __ \\\n/ /_/ / / /_/ /  /_/ /_  / _  /   _  /_/ /\n\\____/  \\____//_____/ /_/  /_/    /_.___/")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%s %s %s %s %s %s %s %s\n\n", Blue.Sprint("HTTP Method:"), Green.Sprint(method), Yellow.Sprint("|"),
@@ -188,22 +209,38 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: res.ContentLength}, nil
 }
 
-func sendRequest(url string, keyword string, extensions []string, data chan Response) error {
+func sendRequest(url string, logger *log.Logger, keyword string, extensions []string, data chan Response) error {
 	if strings.Contains(keyword, "%EXT%") {
 		keyword = removeCharacters(keyword, "%EXT%")
 		for _, ext := range extensions {
 			resp, err := getRequestCustom(url+keyword+"."+ext, keyword+"."+ext)
-			if err != nil && strings.Contains(err.Error(), "connection refused") {
-				return errors.New(resp.url + " :: connection refused")
+			if err != nil {
+				var errr error
+				if strings.Contains(err.Error(), "connection refused") {
+					errr = errors.New(url + "/" + keyword + " :: connection refused")
+				}
+				if strings.Contains(err.Error(), "protocol scheme") {
+					errr = errors.New(url + "/" + keyword + " :: unsupported protocol scheme")
+
+				}
+				logger.Println(errr.Error())
+				return errr
 			}
 			data <- resp
 		}
 		return nil
 	}
 	resp, err := getRequestCustom(url+keyword, keyword)
-	if err != nil && strings.Contains(err.Error(), "connection refused") {
-		return errors.New(url + keyword + " :: connection refused")
-
+	if err != nil {
+		var errr error
+		if strings.Contains(err.Error(), "connection refused") {
+			errr = errors.New(url + "/" + keyword + " :: connection refused")
+		}
+		if strings.Contains(err.Error(), "protocol scheme") {
+			errr = errors.New(url + "/" + keyword + " :: unsupported protocol scheme")
+		}
+		logger.Println(errr.Error())
+		return errr
 	}
 	data <- resp
 
@@ -211,7 +248,7 @@ func sendRequest(url string, keyword string, extensions []string, data chan Resp
 }
 
 //??? Why it doesn`t stop when connection refused is sent
-func requestWorker(ctx context.Context, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
+func requestWorker(ctx context.Context, logger *log.Logger, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
 	// flag := false
 	// for {
 	// 	errc := make(chan error, 1)
@@ -219,7 +256,6 @@ func requestWorker(ctx context.Context, wg *sync.WaitGroup, url string, keywords
 	// 	case keyword, ok := <-keywords:
 	// 		go sendRequest(url, keyword, extensions, data)
 	// 		if !ok {
-	// 			fmt.Println("EDEDEEEEEDDDE")
 	// 			keywords = nil
 	// 		}
 	// 	case err := <-errc:
@@ -238,10 +274,12 @@ func requestWorker(ctx context.Context, wg *sync.WaitGroup, url string, keywords
 			wg.Done()
 			return
 		default:
-			err := sendRequest(url, keyword, extensions, data)
+			err := sendRequest(url, logger, keyword, extensions, data)
 			if err != nil {
-				fmt.Println(err)
-				break
+				logger.Println(err)
+				fmt.Println("Error occured")
+				wg.Done()
+				return
 			}
 			atomic.AddInt64(size, 1)
 		}
@@ -249,20 +287,20 @@ func requestWorker(ctx context.Context, wg *sync.WaitGroup, url string, keywords
 	wg.Done()
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *log.Logger, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 
 	go func() {
 		errc := scanDict(ctx, dict, keywords, sizeP)
 		err := <-errc
 		if err != nil {
-			errorPrintAndExit(err)
+			logger.Fatalln(err)
 		}
 	}()
 
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go requestWorker(ctx, &wg, url, keywords, extensions, responses, tSizeP)
+		go requestWorker(ctx, logger, &wg, url, keywords, extensions, responses, tSizeP)
 	}
 	go func() {
 		for range interrupt {
@@ -273,7 +311,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, w io.Writer,
 				fmt.Fprint(w, ":::Canceled by user:::")
 			}
 			RedWhite.Fprint(os.Stdout, "Canceled by user")
-
+			fmt.Println()
 		}
 
 	}()
@@ -282,6 +320,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, w io.Writer,
 		close(responses)
 	}()
 }
+
 func bruteWebSite(url string, dict string, extensions []string, method string, power int, verbose bool, w io.Writer) bool {
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
@@ -300,13 +339,23 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	power *= 10
 	timer := time.Now()
 	cw := CommonWriter{responses: responses, w: w}
+	var path string
+	if strings.Contains(url, "127.0.0.1") {
+		path = "local"
+	} else {
+		urlS, _ := URL.Parse(url)
+		path = urlS.Path[:len(urlS.Path)-4]
+	}
+	logger, file := createLogger(path)
 
-	workerLauncher(ctx, cancel, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
+	workerLauncher(ctx, cancel, logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
 
 	checkColors(w)
 	welcomeDataPrint(w, method, power, url, extensions)
 	cw.writeWithColors(ctx, verbose)
 	endDataPrint(w, size, tSize, time.Since(timer))
+
+	closeLogger(logger, file)
 
 	return true
 }
