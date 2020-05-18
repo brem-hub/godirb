@@ -89,19 +89,31 @@ func (r *Response) Write() string {
 	return str
 }
 
-func createLogger(website string) (*log.Logger, *os.File) {
-	file, err := os.Create(fmt.Sprintf("log/log_%s", website))
+type loggerCust struct {
+	logger *log.Logger
+}
+
+func (l *loggerCust) Println(message string) {
+	l.logger.Printf("[%02d:%02d:%02d] %s\n", time.Now().Hour(), time.Now().Minute(), time.Now().Second(), message)
+
+}
+
+func createLogger(website string) (loggerCust, *os.File) {
+	timer := time.Now()
+	file, err := os.Create(fmt.Sprintf("log/log_for_%s_%d-%02d-%02d_%02d-%02d-%02d", website, timer.Year(), timer.Month(),
+		timer.Day(), timer.Hour(), timer.Minute(), timer.Second()))
 	if err != nil {
 		fmt.Println(err)
-		return nil, nil
+		return loggerCust{}, nil
 	}
-	logger := log.New(file, "", 0)
-	logger.Println("Started logging")
+	log := log.New(file, "", 0)
+	logger := loggerCust{logger: log}
+	logger.Println("Logger is started")
 	return logger, file
 }
 
-func closeLogger(logger *log.Logger, file *os.File) {
-	logger.Println("Logging finished")
+func closeLogger(logger loggerCust, file *os.File) {
+	logger.Println("Logger is closed")
 	file.Close()
 }
 
@@ -209,7 +221,7 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: res.ContentLength}, nil
 }
 
-func sendRequest(url string, logger *log.Logger, keyword string, extensions []string, data chan Response) error {
+func sendRequest(url string, logger loggerCust, keyword string, extensions []string, data chan Response) error {
 	if strings.Contains(keyword, "%EXT%") {
 		keyword = removeCharacters(keyword, "%EXT%")
 		for _, ext := range extensions {
@@ -248,7 +260,7 @@ func sendRequest(url string, logger *log.Logger, keyword string, extensions []st
 }
 
 //??? Why it doesn`t stop when connection refused is sent
-func requestWorker(ctx context.Context, logger *log.Logger, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
+func requestWorker(ctx context.Context, logger loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
 	// flag := false
 	// for {
 	// 	errc := make(chan error, 1)
@@ -276,7 +288,7 @@ func requestWorker(ctx context.Context, logger *log.Logger, wg *sync.WaitGroup, 
 		default:
 			err := sendRequest(url, logger, keyword, extensions, data)
 			if err != nil {
-				logger.Println(err)
+				logger.Println(err.Error())
 				fmt.Println("Error occured")
 				wg.Done()
 				return
@@ -287,14 +299,14 @@ func requestWorker(ctx context.Context, logger *log.Logger, wg *sync.WaitGroup, 
 	wg.Done()
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *log.Logger, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 
 	go func() {
 		errc := scanDict(ctx, dict, keywords, sizeP)
 		err := <-errc
 		if err != nil {
-			logger.Fatalln(err)
+			logger.logger.Fatalln(err)
 		}
 	}()
 
@@ -347,7 +359,6 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 		path = urlS.Path[:len(urlS.Path)-4]
 	}
 	logger, file := createLogger(path)
-
 	workerLauncher(ctx, cancel, logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
 
 	checkColors(w)

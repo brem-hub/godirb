@@ -17,13 +17,12 @@ create log
 create soft exit#
 */
 var (
-	url         = flag.String("u", "http://127.0.0.1:8000/", "url to bruteforce")
-	custom_dict = flag.Bool("cd", false, "use custom dictionary")
-	dict_path   = flag.String("d", "", "custom dictionary path")
-	verbose     = flag.Bool("v", false, "more output")
-	method      = flag.String("m", "get", "specify method to use [get, post]")
-	file        = flag.String("f", "", "specify file to write to ")
-	power       = flag.Int("p", 1, "Amount of Goroutines X10. Normal usage: [1 ... 5]")
+	url         = flag.String("u", "", "specify url to run. Usage: -u <url>")
+	custom_dict = flag.String("cd", "", "use custom dictionary. Usage: -cd <path>")
+	verbose     = flag.Bool("v", false, "show more information(each request)")
+	method      = flag.String("m", "get", "specify method to use [get, post](post is not supported for now)")
+	file        = flag.String("f", "", "specify file to output into. Usage: -f <path>")
+	power       = flag.Int("p", 1, "amount of goroutines. Usage -p [1...5]")
 	extensions  StringSlice
 )
 
@@ -31,13 +30,12 @@ func main() {
 	dict := "data/dicc.txt"
 	flag.Var(&extensions, "e", "extensions to pass. Usage: -e=php,txt,rcc")
 	flag.Parse()
-	if *custom_dict {
-		if *dict_path == "" {
-			fmt.Println("specify custom dictionary path")
-			os.Exit(1)
-		}
-		dict = *dict_path
-
+	if *url == "" {
+		fmt.Println("specify url to run, usage: -u <url>")
+		os.Exit(1)
+	}
+	if *custom_dict != "" {
+		dict = *custom_dict
 	}
 	if *file == "" {
 		bruteWebSite(*url, dict, extensions, *method, *power, *verbose, os.Stdout)
