@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	URL "net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -90,24 +89,24 @@ func (r *Response) Write() string {
 }
 
 type loggerCust struct {
+	mutex  sync.Mutex
 	logger *log.Logger
 }
 
 func (l *loggerCust) Println(message string) {
 	l.logger.Printf("[%02d:%02d:%02d] %s\n", time.Now().Hour(), time.Now().Minute(), time.Now().Second(), message)
-
 }
 
 func createLogger(website string) (loggerCust, *os.File) {
 	timer := time.Now()
-	file, err := os.Create(fmt.Sprintf("log/log_for_%s_%d-%02d-%02d_%02d-%02d-%02d", website, timer.Year(), timer.Month(),
+	file, err := os.Create(fmt.Sprintf("log/log_%s_%d-%02d-%02d_%02d-%02d-%02d", website, timer.Year(), timer.Month(),
 		timer.Day(), timer.Hour(), timer.Minute(), timer.Second()))
 	if err != nil {
 		fmt.Println(err)
 		return loggerCust{}, nil
 	}
 	log := log.New(file, "", 0)
-	logger := loggerCust{logger: log}
+	logger := loggerCust{logger: log, mutex: sync.Mutex{}}
 	logger.Println("Logger is started")
 	return logger, file
 }
@@ -235,6 +234,12 @@ func sendRequest(url string, logger loggerCust, keyword string, extensions []str
 					errr = errors.New(url + "/" + keyword + " :: unsupported protocol scheme")
 
 				}
+				if strings.Contains(err.Error(), "dial tcp") {
+					errr = errors.New(url + "/" + keyword + " :: no such host (dial tcp)")
+				}
+				if errr.Error() == "" {
+					errr = errors.New(url + "/" + keyword + " :: not custom error :: " + err.Error())
+				}
 				logger.Println(errr.Error())
 				return errr
 			}
@@ -250,6 +255,12 @@ func sendRequest(url string, logger loggerCust, keyword string, extensions []str
 		}
 		if strings.Contains(err.Error(), "protocol scheme") {
 			errr = errors.New(url + "/" + keyword + " :: unsupported protocol scheme")
+		}
+		if strings.Contains(err.Error(), "dial tcp") {
+			errr = errors.New(url + "/" + keyword + " :: no such host (dial tcp)")
+		}
+		if errr.Error() == "" {
+			errr = errors.New(url + "/" + keyword + " :: not custom error :: " + err.Error())
 		}
 		logger.Println(errr.Error())
 		return errr
@@ -324,6 +335,8 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger logge
 			}
 			RedWhite.Fprint(os.Stdout, "Canceled by user")
 			fmt.Println()
+			logger.Println("canceled by user")
+			os.Exit(1)
 		}
 
 	}()
@@ -355,10 +368,14 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	if strings.Contains(url, "127.0.0.1") {
 		path = "local"
 	} else {
-		urlS, _ := URL.Parse(url)
-		path = urlS.Path[:len(urlS.Path)-4]
+		if strings.Contains(url, ".com") {
+			path = strings.Replace(url, ".com", "", -1)
+		} else if strings.Contains(url, ".ru") {
+			path = strings.Replace(url, ".ru", "", -1)
+		}
 	}
 	logger, file := createLogger(path)
+	fmt.Println("TRY SIZE: ", size)
 	workerLauncher(ctx, cancel, logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
 
 	checkColors(w)
