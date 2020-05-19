@@ -141,7 +141,7 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 				fmt.Fprintln(r.w)
 			} else {
 				if response.code != 404 {
-					color.Fprint(r.w, response.Write())
+					color.Fprintf(r.w, "\r%s", response.Write())
 					fmt.Fprintln(r.w)
 					size += tmp
 				}
@@ -150,7 +150,15 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 	}
 	return size, nil
 }
-
+func loader(speed time.Duration) {
+	time.Sleep(150 * time.Millisecond)
+	for {
+		fmt.Printf("\r\\")
+		time.Sleep(speed * time.Millisecond)
+		fmt.Printf("\r/")
+		time.Sleep(speed * time.Millisecond)
+	}
+}
 func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, extensions []string) {
 	if len(extensions) == 0 {
 		extensions = append(extensions, "none")
@@ -165,7 +173,7 @@ func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, 
 	fmt.Fprintln(w, "+---------------+")
 }
 func endDataPrint(w io.Writer, wordsize int64, donesize int64, elapsedTime time.Duration) {
-	fmt.Fprintln(w, "+---------------+")
+	fmt.Fprintln(w, "\r+---------------+")
 	Blue.Fprintln(w, ":::Completed:::")
 	fmt.Fprintln(w, "Recieved codes from :", donesize, "out of:", wordsize, "searches")
 	fmt.Fprintln(w, "Elapsed time:", elapsedTime)
@@ -217,6 +225,7 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
+	defer res.Body.Close()
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: res.ContentLength}, nil
 }
 
@@ -224,20 +233,17 @@ func sendRequest(url string, logger loggerCust, keyword string, extensions []str
 	if strings.Contains(keyword, "%EXT%") {
 		keyword = removeCharacters(keyword, "%EXT%")
 		for _, ext := range extensions {
-			resp, err := getRequestCustom(url+keyword+"."+ext, keyword+"."+ext)
+			resp, err := getRequestCustom(url+"/"+keyword+"."+ext, keyword+"."+ext)
 			if err != nil {
 				var errr error
-				if strings.Contains(err.Error(), "connection refused") {
+				switch {
+				case strings.Contains(err.Error(), "connection refused"):
 					errr = errors.New(url + "/" + keyword + " :: connection refused")
-				}
-				if strings.Contains(err.Error(), "protocol scheme") {
+				case strings.Contains(err.Error(), "protocol scheme"):
 					errr = errors.New(url + "/" + keyword + " :: unsupported protocol scheme")
-
-				}
-				if strings.Contains(err.Error(), "dial tcp") {
+				case strings.Contains(err.Error(), "dial tcp"):
 					errr = errors.New(url + "/" + keyword + " :: no such host (dial tcp)")
-				}
-				if errr.Error() == "" {
+				default:
 					errr = errors.New(url + "/" + keyword + " :: not custom error :: " + err.Error())
 				}
 				logger.Println(errr.Error())
@@ -247,19 +253,17 @@ func sendRequest(url string, logger loggerCust, keyword string, extensions []str
 		}
 		return nil
 	}
-	resp, err := getRequestCustom(url+keyword, keyword)
+	resp, err := getRequestCustom(url+"/"+keyword, keyword)
 	if err != nil {
 		var errr error
-		if strings.Contains(err.Error(), "connection refused") {
+		switch {
+		case strings.Contains(err.Error(), "connection refused"):
 			errr = errors.New(url + "/" + keyword + " :: connection refused")
-		}
-		if strings.Contains(err.Error(), "protocol scheme") {
+		case strings.Contains(err.Error(), "protocol scheme"):
 			errr = errors.New(url + "/" + keyword + " :: unsupported protocol scheme")
-		}
-		if strings.Contains(err.Error(), "dial tcp") {
+		case strings.Contains(err.Error(), "dial tcp"):
 			errr = errors.New(url + "/" + keyword + " :: no such host (dial tcp)")
-		}
-		if errr.Error() == "" {
+		default:
 			errr = errors.New(url + "/" + keyword + " :: not custom error :: " + err.Error())
 		}
 		logger.Println(errr.Error())
@@ -312,7 +316,7 @@ func requestWorker(ctx context.Context, logger loggerCust, wg *sync.WaitGroup, u
 
 func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
-
+	// url = "https://" + url
 	go func() {
 		errc := scanDict(ctx, dict, keywords, sizeP)
 		err := <-errc
@@ -375,8 +379,9 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 		}
 	}
 	logger, file := createLogger(path)
-	fmt.Println("TRY SIZE: ", size)
 	workerLauncher(ctx, cancel, logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
+
+	go loader(500)
 
 	checkColors(w)
 	welcomeDataPrint(w, method, power, url, extensions)

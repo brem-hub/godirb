@@ -10,6 +10,7 @@ import (
 create output file#
 change colors#
 change dicts#
+create http, https changes (default https)
 create recursion?
 create bot
 create POST
