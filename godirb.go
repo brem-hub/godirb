@@ -91,36 +91,77 @@ func (r *Response) Write() string {
 type loggerCust struct {
 	mutex  sync.Mutex
 	logger *log.Logger
+	file   *os.File
 }
 
 func (l *loggerCust) Println(message string) {
 	l.logger.Printf("[%02d:%02d:%02d] %s\n", time.Now().Hour(), time.Now().Minute(), time.Now().Second(), message)
 }
 
-func createLogger(website string) (loggerCust, *os.File) {
+func (l *loggerCust) createLogger(url string) {
+	path := clearUrl(url)
 	timer := time.Now()
-	file, err := os.Create(fmt.Sprintf("log/log_%s_%d-%02d-%02d_%02d-%02d-%02d", website, timer.Year(), timer.Month(),
+	file, err := os.Create(fmt.Sprintf("log/log_%s_%d-%02d-%02d_%02d-%02d-%02d", path, timer.Year(), timer.Month(),
 		timer.Day(), timer.Hour(), timer.Minute(), timer.Second()))
 	if err != nil {
 		fmt.Println(err)
-		return loggerCust{}, nil
+		return
 	}
+	l.file = file
 	log := log.New(file, "", 0)
-	logger := loggerCust{logger: log, mutex: sync.Mutex{}}
-	logger.Println("Logger is started")
-	return logger, file
+	l.logger = log
+	l.mutex = sync.Mutex{}
+	l.Println("Logger is started")
 }
 
-func closeLogger(logger loggerCust, file *os.File) {
-	logger.Println("Logger is closed")
-	file.Close()
+func (l *loggerCust) closeLogger() {
+	l.Println("Logger is closed")
+	l.file.Close()
+}
+
+func clearUrl(url string) string {
+	var path string
+	if strings.Contains(url, "127.0.0.1") {
+		path = "local"
+	} else {
+		if strings.Contains(url, ".com") {
+			path = strings.Replace(url, ".com", "", -1)
+		} else if strings.Contains(url, ".ru") {
+			path = strings.Replace(url, ".ru", "", -1)
+		}
+		if strings.Contains(path, "https://") {
+			path = strings.Replace(path, "https://", "", -1)
+		} else if strings.Contains(path, "http://") {
+			path = strings.Replace(path, "http://", "", -1)
+		}
+	}
+	return path
+}
+
+func addHTTPHTTPSProtocols(url string, protocol string) string {
+	switch {
+	case protocol == "http":
+		return "http://" + url
+	case protocol == "https":
+		return "https://" + url
+	}
+	return ""
 }
 
 type CommonWriter struct {
 	responses chan Response
+	codes     []int
 	w         io.Writer
 }
 
+func (r *CommonWriter) checkCodes(code int) bool {
+	for _, v := range r.codes {
+		if v == code {
+			return true
+		}
+	}
+	return false
+}
 func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, error) {
 	size := 0
 	tmp := 0
@@ -140,7 +181,7 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 				color.Fprint(r.w, response.Write())
 				fmt.Fprintln(r.w)
 			} else {
-				if response.code != 404 {
+				if !r.checkCodes(response.code) {
 					color.Fprintf(r.w, "\r%s", response.Write())
 					fmt.Fprintln(r.w)
 					size += tmp
@@ -150,6 +191,8 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 	}
 	return size, nil
 }
+
+//Set speed of animation in Milliseconds
 func loader(speed time.Duration) {
 	time.Sleep(150 * time.Millisecond)
 	for {
@@ -208,14 +251,6 @@ func scanDict(ctx context.Context, filename string, keywords chan string, size *
 	close(keywords)
 	return errc
 }
-func errorPrintAndExit(err error) {
-	fmt.Println(err)
-	os.Exit(1)
-}
-func errorPrint(err error) {
-	fmt.Println(err)
-}
-
 func getRequestCustom(url string, keyword string) (Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -226,7 +261,11 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 		return Response{}, err
 	}
 	defer res.Body.Close()
-	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: res.ContentLength}, nil
+	size := res.ContentLength
+	if size == -1 {
+		size = 0
+	}
+	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: size}, nil
 }
 
 func sendRequest(url string, logger loggerCust, keyword string, extensions []string, data chan Response) error {
@@ -274,7 +313,6 @@ func sendRequest(url string, logger loggerCust, keyword string, extensions []str
 	return nil
 }
 
-//??? Why it doesn`t stop when connection refused is sent
 func requestWorker(ctx context.Context, logger loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
 	// flag := false
 	// for {
@@ -340,6 +378,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger logge
 			RedWhite.Fprint(os.Stdout, "Canceled by user")
 			fmt.Println()
 			logger.Println("canceled by user")
+
 			os.Exit(1)
 		}
 
@@ -350,9 +389,11 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger logge
 	}()
 }
 
-func bruteWebSite(url string, dict string, extensions []string, method string, power int, verbose bool, w io.Writer) bool {
+func bruteWebSite(url string, dict string, extensions []string, method string, power int, protocol string, verbose bool, w io.Writer) bool {
+	power *= 10
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
+	var logger loggerCust
 	var size int64
 	var tSize int64
 	var tSizeP *int64
@@ -362,23 +403,15 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
+
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 
-	power *= 10
 	timer := time.Now()
-	cw := CommonWriter{responses: responses, w: w}
-	var path string
-	if strings.Contains(url, "127.0.0.1") {
-		path = "local"
-	} else {
-		if strings.Contains(url, ".com") {
-			path = strings.Replace(url, ".com", "", -1)
-		} else if strings.Contains(url, ".ru") {
-			path = strings.Replace(url, ".ru", "", -1)
-		}
-	}
-	logger, file := createLogger(path)
+	cw := CommonWriter{responses: responses, w: w, codes: []int{400, 500, 404}}
+
+	logger.createLogger(url)
+	url = addHTTPHTTPSProtocols(url, protocol)
 	workerLauncher(ctx, cancel, logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
 
 	go loader(500)
@@ -388,7 +421,7 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	cw.writeWithColors(ctx, verbose)
 	endDataPrint(w, size, tSize, time.Since(timer))
 
-	closeLogger(logger, file)
+	logger.closeLogger()
 
 	return true
 }
