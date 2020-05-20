@@ -33,6 +33,7 @@ var colors = map[int]*colorTerm.Color{
 	200: GreenBg,
 	301: GreenBg,
 	302: GreenBg,
+	500: Cyan,
 }
 
 func checkColors(w io.Writer) {
@@ -218,8 +219,9 @@ func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, 
 func endDataPrint(w io.Writer, wordsize int64, donesize int64, elapsedTime time.Duration) {
 	fmt.Fprintln(w, "\r+---------------+")
 	Blue.Fprintln(w, ":::Completed:::")
-	fmt.Fprintln(w, "Recieved codes from :", donesize, "out of:", wordsize, "searches")
-	fmt.Fprintln(w, "Elapsed time:", elapsedTime)
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s/%s codes returned\n", Green.Sprint(donesize), Blue.Sprint(wordsize))
+	fmt.Fprintf(w, "Elapsed time: %s\n", Green.Sprint(elapsedTime))
 }
 func removeCharacters(input string, characters string) string {
 	filter := func(r rune) rune {
@@ -268,7 +270,7 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: size}, nil
 }
 
-func sendRequest(url string, logger loggerCust, keyword string, extensions []string, data chan Response) error {
+func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) error {
 	if strings.Contains(keyword, "%EXT%") {
 		keyword = removeCharacters(keyword, "%EXT%")
 		for _, ext := range extensions {
@@ -313,7 +315,7 @@ func sendRequest(url string, logger loggerCust, keyword string, extensions []str
 	return nil
 }
 
-func requestWorker(ctx context.Context, logger loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
+func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
 	// flag := false
 	// for {
 	// 	errc := make(chan error, 1)
@@ -352,7 +354,7 @@ func requestWorker(ctx context.Context, logger loggerCust, wg *sync.WaitGroup, u
 	wg.Done()
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 	// url = "https://" + url
 	go func() {
@@ -412,7 +414,7 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 
 	logger.createLogger(url)
 	url = addHTTPHTTPSProtocols(url, protocol)
-	workerLauncher(ctx, cancel, logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
+	workerLauncher(ctx, cancel, &logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
 
 	go loader(500)
 
