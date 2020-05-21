@@ -7,15 +7,7 @@ import (
 )
 
 /*TODO:
-create output file#
-change colors#
-change dicts#
-create http, https changes (default https)#
-create recursion??
-create bot
 create POST
-create log#
-create soft exit#
 */
 var (
 	url        = flag.String("u", "", "specify url to run. Usage: -u <url>")
@@ -25,6 +17,7 @@ var (
 	file       = flag.String("f", "", "specify file to output into. Usage: -f <path>")
 	power      = flag.Int("p", 1, "amount of goroutines. Usage -p [1...5]")
 	protocol   = flag.String("protocol", "https", "specify protocol. Usage: -protocol <http/https>")
+	clear      = flag.Bool("clear", false, "Use this flag to clear log/ folder.")
 	extensions StringSlice
 )
 
@@ -32,12 +25,24 @@ func main() {
 	dict := "data/dicc.txt"
 	flag.Var(&extensions, "e", "extensions to pass. Usage: -e=php,txt,rcc")
 	flag.Parse()
+	if *power > 5 {
+		fmt.Printf("Do you really want to use %s goroutines?\n", Red.Sprint(*power*10))
+		os.Exit(1)
+	}
+	if *clear {
+		err := clearDir("log/")
+		if err != nil {
+			Red.Println(err)
+		}
+		Green.Println("Log folder has been cleared")
+		os.Exit(1)
+	}
 	if *url == "" {
-		fmt.Println("specify url to run, usage: -u <url>")
+		fmt.Println("Specify url to run, usage: -u <url>")
 		os.Exit(1)
 	}
 	if *protocol != "http" && *protocol != "https" {
-		fmt.Println("protocol should be HTTP or HTTPS")
+		fmt.Println("Protocol should be HTTP or HTTPS")
 		os.Exit(1)
 	}
 	if *customDict != "" {
@@ -48,7 +53,7 @@ func main() {
 	} else {
 		file, err := os.Create(*file)
 		if err != nil {
-			fmt.Println(err)
+			Red.Println(err)
 			os.Exit(1)
 		}
 		bruteWebSite(*url, dict, extensions, *method, *power, *protocol, *verbose, file)

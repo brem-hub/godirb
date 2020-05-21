@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,9 +32,9 @@ var (
 
 var colors = map[int]*colorTerm.Color{
 	404: Cyan,
-	200: GreenBg,
-	301: GreenBg,
-	302: GreenBg,
+	200: Green,
+	301: Green,
+	302: Green,
 	500: Cyan,
 }
 
@@ -119,7 +121,16 @@ func (l *loggerCust) closeLogger() {
 	l.Println("Logger is closed")
 	l.file.Close()
 }
-
+func clearDir(dir string) error {
+	names, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range names {
+		os.RemoveAll(path.Join([]string{dir, entry.Name()}...))
+	}
+	return nil
+}
 func clearUrl(url string) string {
 	var path string
 	if strings.Contains(url, "127.0.0.1") {
@@ -203,7 +214,7 @@ func loader(speed time.Duration) {
 		time.Sleep(speed * time.Millisecond)
 	}
 }
-func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, extensions []string) {
+func welcomeDataPrint(w io.Writer, logger *loggerCust, method string, gorutines int, target string, extensions []string) {
 	if len(extensions) == 0 {
 		extensions = append(extensions, "none")
 	}
@@ -212,6 +223,7 @@ func welcomeDataPrint(w io.Writer, method string, gorutines int, target string, 
 	fmt.Fprintf(w, "%s %s %s %s %s %s %s %s\n\n", Blue.Sprint("HTTP Method:"), Green.Sprint(method), Yellow.Sprint("|"),
 		Blue.Sprint("Gorutines:"), Green.Sprint(gorutines), Yellow.Sprint("|"),
 		Blue.Sprint("Extensions:"), Green.Sprint(strings.Join(extensions, " ")))
+	fmt.Fprintf(w, "%s %s\n\n", Blue.Sprint("Error log:"), Green.Sprint(logger.file.Name()))
 	fmt.Fprintf(w, "%s %s\n\n", Blue.Sprint("Target:"), Green.Sprint(target))
 	Blue.Fprintln(w, ":::Starting:::")
 	fmt.Fprintln(w, "+---------------+")
@@ -260,42 +272,6 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	}
 	res, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
-		return Response{}, err
-	}
-	defer res.Body.Close()
-	size := res.ContentLength
-	if size == -1 {
-		size = 0
-	}
-	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: size}, nil
-}
-
-func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) error {
-	if strings.Contains(keyword, "%EXT%") {
-		keyword = removeCharacters(keyword, "%EXT%")
-		for _, ext := range extensions {
-			resp, err := getRequestCustom(url+"/"+keyword+"."+ext, keyword+"."+ext)
-			if err != nil {
-				var errr error
-				switch {
-				case strings.Contains(err.Error(), "connection refused"):
-					errr = errors.New(url + "/" + keyword + " :: connection refused")
-				case strings.Contains(err.Error(), "protocol scheme"):
-					errr = errors.New(url + "/" + keyword + " :: unsupported protocol scheme")
-				case strings.Contains(err.Error(), "dial tcp"):
-					errr = errors.New(url + "/" + keyword + " :: no such host (dial tcp)")
-				default:
-					errr = errors.New(url + "/" + keyword + " :: not custom error :: " + err.Error())
-				}
-				logger.Println(errr.Error())
-				return errr
-			}
-			data <- resp
-		}
-		return nil
-	}
-	resp, err := getRequestCustom(url+"/"+keyword, keyword)
-	if err != nil {
 		var errr error
 		switch {
 		case strings.Contains(err.Error(), "connection refused"):
@@ -307,44 +283,68 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 		default:
 			errr = errors.New(url + "/" + keyword + " :: not custom error :: " + err.Error())
 		}
-		logger.Println(errr.Error())
-		return errr
+		return Response{}, errr
+	}
+	defer res.Body.Close()
+	size := res.ContentLength
+	if size == -1 {
+		size = 0
+	}
+	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: size}, nil
+}
+
+func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]int, error) {
+	if strings.Contains(keyword, "%EXT%") {
+		keyword = removeCharacters(keyword, "%EXT%")
+		codes := make([]int, 1)
+		for _, ext := range extensions {
+			fullExt := keyword + "." + ext
+			resp, err := getRequestCustom(url+"/"+fullExt, fullExt)
+			if err != nil {
+				logger.Println(err.Error())
+				return []int{0}, err
+			}
+			data <- resp
+			codes = append(codes, resp.code)
+		}
+		return []int{0}, nil
+	}
+	resp, err := getRequestCustom(url+"/"+keyword, keyword)
+	if err != nil {
+		logger.Println(err.Error())
+		return []int{0}, err
 	}
 	data <- resp
 
-	return nil
+	return []int{resp.code}, nil
 }
 
-func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, data chan Response, size *int64) {
-	// flag := false
-	// for {
-	// 	errc := make(chan error, 1)
-	// 	select {
-	// 	case keyword, ok := <-keywords:
-	// 		go sendRequest(url, keyword, extensions, data)
-	// 		if !ok {
-	// 			keywords = nil
-	// 		}
-	// 	case err := <-errc:
-	// 		fmt.Println(err)
-	// 		wg.Done()
-	// 		return
-	// 	}
-	// 	if flag {
-	// 		wg.Done()
-	// 		return
-	// 	}
-
+func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, recRep int, data chan Response, size *int64) {
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
 			wg.Done()
 			return
 		default:
-			err := sendRequest(url, logger, keyword, extensions, data)
+			codes, err := sendRequest(url, logger, keyword, extensions, data)
+			// if repRec is ignored - works as usial
+			if recRep > 0 {
+				//Do something with EXT - not remove then + php, but replace EXT with php, because it now can be
+				// google.com/lel.EXT/kek/
+				if codes[0] != 0 {
+					for code := range codes {
+						if code == 301 {
+							wg.Add(1)
+
+							go requestWorker(ctx, logger, wg, url+"/"+keyword, keywords, extensions, recRep, data, size)
+							recRep--
+						}
+					}
+				}
+			}
 			if err != nil {
 				logger.Println(err.Error())
-				fmt.Println("Error occured")
+				Red.Println("Error occured")
 				wg.Done()
 				return
 			}
@@ -356,7 +356,6 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 
 func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
-	// url = "https://" + url
 	go func() {
 		errc := scanDict(ctx, dict, keywords, sizeP)
 		err := <-errc
@@ -367,7 +366,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go requestWorker(ctx, logger, &wg, url, keywords, extensions, responses, tSizeP)
+		go requestWorker(ctx, logger, &wg, url, keywords, extensions, 0, responses, tSizeP)
 	}
 	go func() {
 		for range interrupt {
@@ -379,8 +378,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 			}
 			RedWhite.Fprint(os.Stdout, "Canceled by user")
 			fmt.Println()
-			logger.Println("canceled by user")
-
+			logger.Println("Canceled by user")
 			os.Exit(1)
 		}
 
@@ -419,7 +417,7 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	go loader(500)
 
 	checkColors(w)
-	welcomeDataPrint(w, method, power, url, extensions)
+	welcomeDataPrint(w, &logger, method, power, url, extensions)
 	cw.writeWithColors(ctx, verbose)
 	endDataPrint(w, size, tSize, time.Since(timer))
 
