@@ -244,26 +244,31 @@ func removeCharacters(input string, characters string) string {
 	}
 	return strings.Map(filter, input)
 }
-func scanDict(ctx context.Context, filename string, keywords chan string, size *int64) chan error {
+func scanDict(ctx context.Context, filename string, keywords chan string, size *int64, recursive bool) ([]string, chan error) {
 	errc := make(chan error, 1)
 	file, err := os.Open(filename)
+	cache := make([]string, 1)
 	errc <- err
 	if err != nil {
-		return errc
+		return []string{}, errc
 	}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
 			close(keywords)
-			return errc
+			return []string{}, errc
 		default:
-			keywords <- scanner.Text()
+			text := scanner.Text()
+			if recursive {
+				cache = append(cache, text)
+			}
+			keywords <- text
 			*size++
 		}
 	}
 	close(keywords)
-	return errc
+	return cache, errc
 }
 func getRequestCustom(url string, keyword string) (Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -325,6 +330,7 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 }
 
 func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, depth int32, data chan Response, recursive chan map[string]int32, size *int64) {
+	fmt.Println("WORKING FOR", url)
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
@@ -352,12 +358,23 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 	wg.Done()
 }
 
+func sliceToChan(slice []string) chan string {
+	ch := make(chan string, len(slice))
+	for _, el := range slice {
+		ch <- el
+	}
+	close(ch)
+	return ch
+}
+
 func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 	var wgT sync.WaitGroup
 	recursiveChan := make(chan map[string]int32, 10)
 	var depth int32
-	depth = 1
+	var vCache []string
+	recursive := true
+	depth = 2
 	go func() {
 		for range interrupt {
 			cancel()
@@ -375,23 +392,26 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 	}()
 
 	go func() {
-		errc := scanDict(ctx, dict, keywords, sizeP)
+		cache, errc := scanDict(ctx, dict, keywords, sizeP, recursive)
 		err := <-errc
 		if err != nil {
 			logger.logger.Fatalln(err)
 		}
+		vCache = cache
 	}()
 
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
 		go requestWorker(ctx, logger, &wg, url, keywords, extensions, depth, responses, recursiveChan, tSizeP)
 	}
+
 	go func() {
 		for recursive := range recursiveChan {
+			//Problem: HAS TO GENERATE HUGE SLICE or run scan for each scan
+			ch := sliceToChan(vCache)
 			for urlI, depth := range recursive {
-				fmt.Println(urlI, depth)
 				wgT.Add(1)
-				go requestWorker(ctx, logger, &wgT, urlI, keywords, extensions, depth, responses, recursiveChan, tSizeP)
+				go requestWorker(ctx, logger, &wgT, urlI, ch, extensions, depth, responses, recursiveChan, tSizeP)
 			}
 		}
 	}()
