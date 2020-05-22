@@ -326,6 +326,7 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 	if resp.code == 307 || resp.code == 308 {
 		return []string{resp.url}, nil
 	}
+	//Change to []string{}
 	return []string{resp.url}, nil
 }
 
