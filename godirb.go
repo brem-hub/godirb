@@ -330,7 +330,6 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 }
 
 func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, depth int32, data chan Response, recursive chan map[string]int32, size *int64) {
-	fmt.Println("WORKING FOR", url)
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
@@ -358,13 +357,11 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 	wg.Done()
 }
 
-func sliceToChan(slice []string) chan string {
-	ch := make(chan string, len(slice))
+func sliceToChan(slice []string, ch chan string) {
 	for _, el := range slice {
 		ch <- el
 	}
 	close(ch)
-	return ch
 }
 
 func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
@@ -390,7 +387,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 		}
 
 	}()
-
+	wgT.Add(1)
 	go func() {
 		cache, errc := scanDict(ctx, dict, keywords, sizeP, recursive)
 		err := <-errc
@@ -398,17 +395,18 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 			logger.logger.Fatalln(err)
 		}
 		vCache = cache
+		wgT.Done()
 	}()
-
+	wgT.Wait()
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
 		go requestWorker(ctx, logger, &wg, url, keywords, extensions, depth, responses, recursiveChan, tSizeP)
 	}
 
 	go func() {
+		ch := make(chan string, 100)
+		go sliceToChan(vCache, ch)
 		for recursive := range recursiveChan {
-			//Problem: HAS TO GENERATE HUGE SLICE or run scan for each scan
-			ch := sliceToChan(vCache)
 			for urlI, depth := range recursive {
 				wgT.Add(1)
 				go requestWorker(ctx, logger, &wgT, urlI, ch, extensions, depth, responses, recursiveChan, tSizeP)
