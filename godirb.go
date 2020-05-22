@@ -321,11 +321,10 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 	if resp.code == 307 || resp.code == 308 {
 		return []string{resp.url}, nil
 	}
-	return []string{}, nil
+	return []string{resp.url}, nil
 }
 
-func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, recRep int, data chan Response, size *int64) {
-	fmt.Println("TESTING: ", url)
+func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, depth int32, data chan Response, recursive chan map[string]int32, size *int64) {
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
@@ -342,12 +341,10 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 			}
 			atomic.AddInt64(size, 1)
 
-			if recRep > 0 {
-				if len(urls) > 0 {
-					for _, urlI := range urls {
-						go requestWorker(ctx, logger, wg, urlI, keywords, extensions, recRep, data, size)
-					}
-					recRep--
+			if len(urls) > 0 && depth > 0 {
+				depth--
+				for _, urlI := range urls {
+					recursive <- map[string]int32{urlI: depth}
 				}
 			}
 		}
@@ -357,18 +354,10 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 
 func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
-	go func() {
-		errc := scanDict(ctx, dict, keywords, sizeP)
-		err := <-errc
-		if err != nil {
-			logger.logger.Fatalln(err)
-		}
-	}()
-
-	for grNum := 0; grNum < power; grNum++ {
-		wg.Add(1)
-		go requestWorker(ctx, logger, &wg, url, keywords, extensions, 1, responses, tSizeP)
-	}
+	var wgT sync.WaitGroup
+	recursiveChan := make(chan map[string]int32, 10)
+	var depth int32
+	depth = 1
 	go func() {
 		for range interrupt {
 			cancel()
@@ -384,8 +373,31 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 		}
 
 	}()
+
+	go func() {
+		errc := scanDict(ctx, dict, keywords, sizeP)
+		err := <-errc
+		if err != nil {
+			logger.logger.Fatalln(err)
+		}
+	}()
+
+	for grNum := 0; grNum < power; grNum++ {
+		wg.Add(1)
+		go requestWorker(ctx, logger, &wg, url, keywords, extensions, depth, responses, recursiveChan, tSizeP)
+	}
+	go func() {
+		for recursive := range recursiveChan {
+			for urlI, depth := range recursive {
+				fmt.Println(urlI, depth)
+				wgT.Add(1)
+				go requestWorker(ctx, logger, &wgT, urlI, keywords, extensions, depth, responses, recursiveChan, tSizeP)
+			}
+		}
+	}()
 	go func() {
 		wg.Wait()
+		wgT.Wait()
 		close(responses)
 	}()
 }
