@@ -293,55 +293,47 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: size}, nil
 }
 
-func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]int, error) {
+func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]string, error) {
 	if strings.Contains(keyword, "%EXT%") {
-		keyword = removeCharacters(keyword, "%EXT%")
-		codes := make([]int, 1)
+		urls := make([]string, 0)
 		for _, ext := range extensions {
-			fullExt := keyword + "." + ext
+			fullExt := strings.Replace(keyword, "%EXT%", "."+ext, 1)
 			resp, err := getRequestCustom(url+"/"+fullExt, fullExt)
 			if err != nil {
 				logger.Println(err.Error())
-				return []int{0}, err
+				return []string{}, err
+			}
+			if resp.code == 307 || resp.code == 308 {
+				urls = append(urls, resp.url)
 			}
 			data <- resp
-			codes = append(codes, resp.code)
+
 		}
-		return []int{0}, nil
+		return urls, nil
 	}
 	resp, err := getRequestCustom(url+"/"+keyword, keyword)
 	if err != nil {
 		logger.Println(err.Error())
-		return []int{0}, err
+		return []string{}, err
 	}
 	data <- resp
 
-	return []int{resp.code}, nil
+	if resp.code == 307 || resp.code == 308 {
+		return []string{resp.url}, nil
+	}
+	return []string{}, nil
 }
 
 func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, recRep int, data chan Response, size *int64) {
+	fmt.Println("TESTING: ", url)
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
 			wg.Done()
 			return
 		default:
-			codes, err := sendRequest(url, logger, keyword, extensions, data)
-			// if repRec is ignored - works as usial
-			if recRep > 0 {
-				//Do something with EXT - not remove then + php, but replace EXT with php, because it now can be
-				// google.com/lel.EXT/kek/
-				if codes[0] != 0 {
-					for code := range codes {
-						if code == 301 {
-							wg.Add(1)
 
-							go requestWorker(ctx, logger, wg, url+"/"+keyword, keywords, extensions, recRep, data, size)
-							recRep--
-						}
-					}
-				}
-			}
+			urls, err := sendRequest(url, logger, keyword, extensions, data)
 			if err != nil {
 				logger.Println(err.Error())
 				Red.Println("Error occured")
@@ -349,6 +341,15 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 				return
 			}
 			atomic.AddInt64(size, 1)
+
+			if recRep > 0 {
+				if len(urls) > 0 {
+					for _, urlI := range urls {
+						go requestWorker(ctx, logger, wg, urlI, keywords, extensions, recRep, data, size)
+					}
+					recRep--
+				}
+			}
 		}
 	}
 	wg.Done()
@@ -366,7 +367,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go requestWorker(ctx, logger, &wg, url, keywords, extensions, 0, responses, tSizeP)
+		go requestWorker(ctx, logger, &wg, url, keywords, extensions, 1, responses, tSizeP)
 	}
 	go func() {
 		for range interrupt {
@@ -389,6 +390,17 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 	}()
 }
 
+// To be edited
+type Params struct {
+	logger    *loggerCust
+	w         io.Writer
+	url       string
+	keywords  chan string
+	dict      string
+	power     int
+	responses chan Response
+}
+
 func bruteWebSite(url string, dict string, extensions []string, method string, power int, protocol string, verbose bool, w io.Writer) bool {
 	power *= 10
 	responses := make(chan Response, 5)
@@ -400,7 +412,6 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	var sizeP *int64
 	sizeP = &size
 	tSizeP = &tSize
-
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
