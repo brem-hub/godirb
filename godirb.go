@@ -270,8 +270,8 @@ func scanDict(ctx context.Context, filename string, keywords chan string, size *
 	close(keywords)
 	return cache, errc
 }
-func getRequestCustom(url string, keyword string) (Response, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func getRequestCustom(url string, keyword string, method string) (Response, error) {
+	req, err := http.NewRequest(strings.ToUpper(method), url, nil)
 	if err != nil {
 		return Response{}, err
 	}
@@ -298,7 +298,7 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: size}, nil
 }
 
-func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]string, error) {
+func sendRequest(url string, method string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]string, error) {
 	codesToRecursive := []int{200, 301, 302, 303, 307, 308}
 	if keyword == "" {
 		return []string{}, nil
@@ -311,10 +311,10 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 			var resp Response
 			var err error
 			if ext == "none" {
-				resp, err = getRequestCustom(url, fullExt)
+				resp, err = getRequestCustom(url, fullExt, method)
 			} else {
 				fullExt = strings.Replace(keyword, "%EXT%", "."+ext, 1)
-				resp, err = getRequestCustom(url+"/"+fullExt, fullExt)
+				resp, err = getRequestCustom(url+"/"+fullExt, fullExt, method)
 			}
 			if err != nil {
 				logger.Println(err.Error())
@@ -326,7 +326,7 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 			data <- resp
 		}
 	} else {
-		resp, err := getRequestCustom(url+"/"+keyword, keyword)
+		resp, err := getRequestCustom(url+"/"+keyword, keyword, method)
 		if err != nil {
 			logger.Println(err.Error())
 			return []string{}, err
@@ -340,15 +340,14 @@ func sendRequest(url string, logger *loggerCust, keyword string, extensions []st
 	return urls, nil
 }
 
-func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, depth int, data chan Response, recursive chan map[string]int, size *int64) {
+func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, method string, keywords chan string, extensions []string, depth int, data chan Response, recursive chan map[string]int, size *int64) {
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
 			wg.Done()
 			return
 		default:
-
-			urls, err := sendRequest(url, logger, keyword, extensions, data)
+			urls, err := sendRequest(url, method, logger, keyword, extensions, data)
 			if err != nil {
 				logger.Println(err.Error())
 				Red.Println("Error occured")
@@ -375,7 +374,7 @@ func sliceToChan(slice []string, ch chan string) {
 	close(ch)
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, depth int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, method string, keywords chan string, dict string, power int, depth int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 	var wgT sync.WaitGroup
 	var vCache []string
@@ -412,7 +411,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 	wgT.Wait()
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go requestWorker(ctx, logger, &wg, url, keywords, extensions, depth, responses, recursiveChan, tSizeP)
+		go requestWorker(ctx, logger, &wg, url, method, keywords, extensions, depth, responses, recursiveChan, tSizeP)
 	}
 	go func() {
 		for recursive := range recursiveChan {
@@ -420,7 +419,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 			go sliceToChan(vCache, ch)
 			for urlI, depth := range recursive {
 				wgT.Add(1)
-				go requestWorker(ctx, logger, &wgT, urlI, ch, extensions, depth, responses, recursiveChan, tSizeP)
+				go requestWorker(ctx, logger, &wgT, urlI, method, ch, extensions, depth, responses, recursiveChan, tSizeP)
 			}
 		}
 	}()
@@ -465,7 +464,7 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 
 	logger.createLogger(url)
 	url = addHTTPHTTPSProtocols(url, protocol)
-	workerLauncher(ctx, cancel, &logger, w, url, keywords, dict, power, recursive, responses, sizeP, tSizeP, interrupt)
+	workerLauncher(ctx, cancel, &logger, w, url, method, keywords, dict, power, recursive, responses, sizeP, tSizeP, interrupt)
 
 	go loader(500)
 

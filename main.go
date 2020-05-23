@@ -38,6 +38,10 @@ func main() {
 		Green.Println("Log folder has been cleared")
 		os.Exit(1)
 	}
+	if *method != "post" && *method != "get" && *method != "head" {
+		fmt.Printf("%s is not a valid http method. Use [get, post, head]\n", Red.Sprint(*method))
+		os.Exit(1)
+	}
 	if *url == "" {
 		fmt.Println("Specify url to run, usage: -u <url>")
 		os.Exit(1)
