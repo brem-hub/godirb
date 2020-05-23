@@ -367,6 +367,34 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 	wg.Done()
 }
 
+func requestWorkerWithTimer(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, method string, keywords chan string, extensions []string, depth int, data chan Response, rTime time.Duration, recursive chan map[string]int, size *int64) {
+	timer := time.NewTimer(rTime)
+	for keyword := range keywords {
+		select {
+		case <-ctx.Done():
+			wg.Done()
+			return
+		case <-timer.C:
+			urls, err := sendRequest(url, method, logger, keyword, extensions, data)
+			if err != nil {
+				logger.Println(err.Error())
+				Red.Println("Error occured")
+				wg.Done()
+				return
+			}
+			atomic.AddInt64(size, 1)
+
+			if len(urls) > 0 && depth > 1 {
+				depth--
+				for _, urlI := range urls {
+					recursive <- map[string]int{urlI: depth}
+				}
+			}
+			timer.Reset(rTime)
+		}
+	}
+	wg.Done()
+}
 func sliceToChan(slice []string, ch chan string) {
 	for _, el := range slice {
 		ch <- el
@@ -374,12 +402,15 @@ func sliceToChan(slice []string, ch chan string) {
 	close(ch)
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, method string, keywords chan string, dict string, power int, depth int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, method string, keywords chan string, dict string, power int, depth int, timer int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 	var wgT sync.WaitGroup
 	var vCache []string
+
+	vTime := time.Duration(timer) * time.Second
 	recursiveFlag := false
 	recursiveChan := make(chan map[string]int, 10)
+
 	if depth > 1 {
 		recursiveFlag = true
 	}
@@ -408,10 +439,14 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 		vCache = cache
 		wgT.Done()
 	}()
-	wgT.Wait()
+	// wgT.Wait()
 	for grNum := 0; grNum < power; grNum++ {
 		wg.Add(1)
-		go requestWorker(ctx, logger, &wg, url, method, keywords, extensions, depth, responses, recursiveChan, tSizeP)
+		if vTime > 0 {
+			go requestWorkerWithTimer(ctx, logger, &wg, url, method, keywords, extensions, depth, responses, vTime, recursiveChan, tSizeP)
+		} else {
+			go requestWorker(ctx, logger, &wg, url, method, keywords, extensions, depth, responses, recursiveChan, tSizeP)
+		}
 	}
 	go func() {
 		for recursive := range recursiveChan {
@@ -419,7 +454,11 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 			go sliceToChan(vCache, ch)
 			for urlI, depth := range recursive {
 				wgT.Add(1)
-				go requestWorker(ctx, logger, &wgT, urlI, method, ch, extensions, depth, responses, recursiveChan, tSizeP)
+				if vTime > 0 {
+					go requestWorkerWithTimer(ctx, logger, &wgT, urlI, method, ch, extensions, depth, responses, vTime, recursiveChan, tSizeP)
+				} else {
+					go requestWorker(ctx, logger, &wgT, urlI, method, ch, extensions, depth, responses, recursiveChan, tSizeP)
+				}
 			}
 		}
 	}()
@@ -442,7 +481,7 @@ type Params struct {
 	responses chan Response
 }
 
-func bruteWebSite(url string, dict string, extensions []string, method string, power int, recursive int, protocol string, verbose bool, w io.Writer) bool {
+func bruteWebSite(url string, dict string, extensions []string, method string, power int, throttle int, recursive int, protocol string, verbose bool, w io.Writer) bool {
 	power *= 10
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
@@ -464,7 +503,7 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 
 	logger.createLogger(url)
 	url = addHTTPHTTPSProtocols(url, protocol)
-	workerLauncher(ctx, cancel, &logger, w, url, method, keywords, dict, power, recursive, responses, sizeP, tSizeP, interrupt)
+	workerLauncher(ctx, cancel, &logger, w, url, method, keywords, dict, power, recursive, throttle, responses, sizeP, tSizeP, interrupt)
 
 	go loader(500)
 
