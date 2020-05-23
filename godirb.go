@@ -166,8 +166,8 @@ type CommonWriter struct {
 	w         io.Writer
 }
 
-func (r *CommonWriter) checkCodes(code int) bool {
-	for _, v := range r.codes {
+func checkCodes(code int, codes []int) bool {
+	for _, v := range codes {
 		if v == code {
 			return true
 		}
@@ -193,7 +193,7 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 				color.Fprint(r.w, response.Write())
 				fmt.Fprintln(r.w)
 			} else {
-				if !r.checkCodes(response.code) {
+				if !checkCodes(response.code, r.codes) {
 					color.Fprintf(r.w, "\r%s", response.Write())
 					fmt.Fprintln(r.w)
 					size += tmp
@@ -299,38 +299,48 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 }
 
 func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]string, error) {
+	codesToRecursive := []int{200, 301, 302, 303, 307, 308}
+	if keyword == "" {
+		return []string{}, nil
+	}
+	urls := make([]string, 0)
+
 	if strings.Contains(keyword, "%EXT%") {
-		urls := make([]string, 0)
+		var fullExt string
 		for _, ext := range extensions {
-			fullExt := strings.Replace(keyword, "%EXT%", "."+ext, 1)
-			resp, err := getRequestCustom(url+"/"+fullExt, fullExt)
+			var resp Response
+			var err error
+			if ext == "none" {
+				resp, err = getRequestCustom(url, fullExt)
+			} else {
+				fullExt = strings.Replace(keyword, "%EXT%", "."+ext, 1)
+				resp, err = getRequestCustom(url+"/"+fullExt, fullExt)
+			}
 			if err != nil {
 				logger.Println(err.Error())
 				return []string{}, err
 			}
-			if resp.code == 307 || resp.code == 308 {
+			if checkCodes(resp.code, codesToRecursive) {
 				urls = append(urls, resp.url)
 			}
 			data <- resp
-
 		}
-		return urls, nil
-	}
-	resp, err := getRequestCustom(url+"/"+keyword, keyword)
-	if err != nil {
-		logger.Println(err.Error())
-		return []string{}, err
-	}
-	data <- resp
+	} else {
+		resp, err := getRequestCustom(url+"/"+keyword, keyword)
+		if err != nil {
+			logger.Println(err.Error())
+			return []string{}, err
+		}
+		data <- resp
 
-	if resp.code == 307 || resp.code == 308 {
-		return []string{resp.url}, nil
+		if checkCodes(resp.code, codesToRecursive) {
+			urls = append(urls, resp.url)
+		}
 	}
-	//Change to []string{}
-	return []string{resp.url}, nil
+	return urls, nil
 }
 
-func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, depth int32, data chan Response, recursive chan map[string]int32, size *int64) {
+func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, depth int, data chan Response, recursive chan map[string]int, size *int64) {
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
@@ -347,10 +357,10 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 			}
 			atomic.AddInt64(size, 1)
 
-			if len(urls) > 0 && depth > 0 {
+			if len(urls) > 0 && depth > 1 {
 				depth--
 				for _, urlI := range urls {
-					recursive <- map[string]int32{urlI: depth}
+					recursive <- map[string]int{urlI: depth}
 				}
 			}
 		}
@@ -365,14 +375,15 @@ func sliceToChan(slice []string, ch chan string) {
 	close(ch)
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, depth int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
 	var wg sync.WaitGroup
 	var wgT sync.WaitGroup
-	recursiveChan := make(chan map[string]int32, 10)
-	var depth int32
 	var vCache []string
-	recursive := true
-	depth = 2
+	recursiveFlag := false
+	recursiveChan := make(chan map[string]int, 10)
+	if depth > 1 {
+		recursiveFlag = true
+	}
 	go func() {
 		for range interrupt {
 			cancel()
@@ -390,7 +401,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 	}()
 	wgT.Add(1)
 	go func() {
-		cache, errc := scanDict(ctx, dict, keywords, sizeP, recursive)
+		cache, errc := scanDict(ctx, dict, keywords, sizeP, recursiveFlag)
 		err := <-errc
 		if err != nil {
 			logger.logger.Fatalln(err)
@@ -403,11 +414,10 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 		wg.Add(1)
 		go requestWorker(ctx, logger, &wg, url, keywords, extensions, depth, responses, recursiveChan, tSizeP)
 	}
-
 	go func() {
-		ch := make(chan string, 100)
-		go sliceToChan(vCache, ch)
 		for recursive := range recursiveChan {
+			ch := make(chan string, 100)
+			go sliceToChan(vCache, ch)
 			for urlI, depth := range recursive {
 				wgT.Add(1)
 				go requestWorker(ctx, logger, &wgT, urlI, ch, extensions, depth, responses, recursiveChan, tSizeP)
@@ -418,6 +428,7 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 		wg.Wait()
 		wgT.Wait()
 		close(responses)
+		close(recursiveChan)
 	}()
 }
 
@@ -432,7 +443,7 @@ type Params struct {
 	responses chan Response
 }
 
-func bruteWebSite(url string, dict string, extensions []string, method string, power int, protocol string, verbose bool, w io.Writer) bool {
+func bruteWebSite(url string, dict string, extensions []string, method string, power int, recursive int, protocol string, verbose bool, w io.Writer) bool {
 	power *= 10
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
@@ -454,7 +465,7 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 
 	logger.createLogger(url)
 	url = addHTTPHTTPSProtocols(url, protocol)
-	workerLauncher(ctx, cancel, &logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
+	workerLauncher(ctx, cancel, &logger, w, url, keywords, dict, power, recursive, responses, sizeP, tSizeP, interrupt)
 
 	go loader(500)
 
