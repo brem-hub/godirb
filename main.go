@@ -17,7 +17,8 @@ var (
 	file       = flag.String("f", "", "specify file to output into. Usage: -f <path>")
 	power      = flag.Int("p", 1, "amount of goroutines. Usage -p [1...5]")
 	protocol   = flag.String("protocol", "https", "specify protocol. Usage: -protocol <http/https>")
-	clear      = flag.Bool("clear", false, "Use this flag to clear log/ folder.")
+	clear      = flag.Bool("clear", false, "use this flag to clear log/ folder.")
+	recursive  = flag.Int("d", 1, "specify depth of recursion. 1 equals <url>/root")
 	extensions StringSlice
 )
 
@@ -49,14 +50,14 @@ func main() {
 		dict = *customDict
 	}
 	if *file == "" {
-		bruteWebSite(*url, dict, extensions, *method, *power, *protocol, *verbose, os.Stdout)
+		bruteWebSite(*url, dict, extensions, *method, *power, *recursive, *protocol, *verbose, os.Stdout)
 	} else {
 		file, err := os.Create(*file)
 		if err != nil {
 			Red.Println(err)
 			os.Exit(1)
 		}
-		bruteWebSite(*url, dict, extensions, *method, *power, *protocol, *verbose, file)
+		bruteWebSite(*url, dict, extensions, *method, *power, *recursive, *protocol, *verbose, file)
 
 	}
 }

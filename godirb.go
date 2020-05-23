@@ -166,8 +166,8 @@ type CommonWriter struct {
 	w         io.Writer
 }
 
-func (r *CommonWriter) checkCodes(code int) bool {
-	for _, v := range r.codes {
+func checkCodes(code int, codes []int) bool {
+	for _, v := range codes {
 		if v == code {
 			return true
 		}
@@ -193,7 +193,7 @@ func (r *CommonWriter) writeWithColors(ctx context.Context, verbose bool) (int, 
 				color.Fprint(r.w, response.Write())
 				fmt.Fprintln(r.w)
 			} else {
-				if !r.checkCodes(response.code) {
+				if !checkCodes(response.code, r.codes) {
 					color.Fprintf(r.w, "\r%s", response.Write())
 					fmt.Fprintln(r.w)
 					size += tmp
@@ -244,26 +244,31 @@ func removeCharacters(input string, characters string) string {
 	}
 	return strings.Map(filter, input)
 }
-func scanDict(ctx context.Context, filename string, keywords chan string, size *int64) chan error {
+func scanDict(ctx context.Context, filename string, keywords chan string, size *int64, recursive bool) ([]string, chan error) {
 	errc := make(chan error, 1)
 	file, err := os.Open(filename)
+	cache := make([]string, 1)
 	errc <- err
 	if err != nil {
-		return errc
+		return []string{}, errc
 	}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
 			close(keywords)
-			return errc
+			return []string{}, errc
 		default:
-			keywords <- scanner.Text()
+			text := scanner.Text()
+			if recursive {
+				cache = append(cache, text)
+			}
+			keywords <- text
 			*size++
 		}
 	}
 	close(keywords)
-	return errc
+	return cache, errc
 }
 func getRequestCustom(url string, keyword string) (Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -293,55 +298,57 @@ func getRequestCustom(url string, keyword string) (Response, error) {
 	return Response{keyword: keyword, url: res.Request.URL.String(), code: res.StatusCode, size: size}, nil
 }
 
-func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]int, error) {
+func sendRequest(url string, logger *loggerCust, keyword string, extensions []string, data chan Response) ([]string, error) {
+	codesToRecursive := []int{200, 301, 302, 303, 307, 308}
+	if keyword == "" {
+		return []string{}, nil
+	}
+	urls := make([]string, 0)
+
 	if strings.Contains(keyword, "%EXT%") {
-		keyword = removeCharacters(keyword, "%EXT%")
-		codes := make([]int, 1)
+		var fullExt string
 		for _, ext := range extensions {
-			fullExt := keyword + "." + ext
-			resp, err := getRequestCustom(url+"/"+fullExt, fullExt)
+			var resp Response
+			var err error
+			if ext == "none" {
+				resp, err = getRequestCustom(url, fullExt)
+			} else {
+				fullExt = strings.Replace(keyword, "%EXT%", "."+ext, 1)
+				resp, err = getRequestCustom(url+"/"+fullExt, fullExt)
+			}
 			if err != nil {
 				logger.Println(err.Error())
-				return []int{0}, err
+				return []string{}, err
+			}
+			if checkCodes(resp.code, codesToRecursive) {
+				urls = append(urls, resp.url)
 			}
 			data <- resp
-			codes = append(codes, resp.code)
 		}
-		return []int{0}, nil
-	}
-	resp, err := getRequestCustom(url+"/"+keyword, keyword)
-	if err != nil {
-		logger.Println(err.Error())
-		return []int{0}, err
-	}
-	data <- resp
+	} else {
+		resp, err := getRequestCustom(url+"/"+keyword, keyword)
+		if err != nil {
+			logger.Println(err.Error())
+			return []string{}, err
+		}
+		data <- resp
 
-	return []int{resp.code}, nil
+		if checkCodes(resp.code, codesToRecursive) {
+			urls = append(urls, resp.url)
+		}
+	}
+	return urls, nil
 }
 
-func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, recRep int, data chan Response, size *int64) {
+func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, url string, keywords chan string, extensions []string, depth int, data chan Response, recursive chan map[string]int, size *int64) {
 	for keyword := range keywords {
 		select {
 		case <-ctx.Done():
 			wg.Done()
 			return
 		default:
-			codes, err := sendRequest(url, logger, keyword, extensions, data)
-			// if repRec is ignored - works as usial
-			if recRep > 0 {
-				//Do something with EXT - not remove then + php, but replace EXT with php, because it now can be
-				// google.com/lel.EXT/kek/
-				if codes[0] != 0 {
-					for code := range codes {
-						if code == 301 {
-							wg.Add(1)
 
-							go requestWorker(ctx, logger, wg, url+"/"+keyword, keywords, extensions, recRep, data, size)
-							recRep--
-						}
-					}
-				}
-			}
+			urls, err := sendRequest(url, logger, keyword, extensions, data)
 			if err != nil {
 				logger.Println(err.Error())
 				Red.Println("Error occured")
@@ -349,24 +356,33 @@ func requestWorker(ctx context.Context, logger *loggerCust, wg *sync.WaitGroup, 
 				return
 			}
 			atomic.AddInt64(size, 1)
+
+			if len(urls) > 0 && depth > 1 {
+				depth--
+				for _, urlI := range urls {
+					recursive <- map[string]int{urlI: depth}
+				}
+			}
 		}
 	}
 	wg.Done()
 }
 
-func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
-	var wg sync.WaitGroup
-	go func() {
-		errc := scanDict(ctx, dict, keywords, sizeP)
-		err := <-errc
-		if err != nil {
-			logger.logger.Fatalln(err)
-		}
-	}()
+func sliceToChan(slice []string, ch chan string) {
+	for _, el := range slice {
+		ch <- el
+	}
+	close(ch)
+}
 
-	for grNum := 0; grNum < power; grNum++ {
-		wg.Add(1)
-		go requestWorker(ctx, logger, &wg, url, keywords, extensions, 0, responses, tSizeP)
+func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *loggerCust, w io.Writer, url string, keywords chan string, dict string, power int, depth int, responses chan Response, sizeP *int64, tSizeP *int64, interrupt chan os.Signal) {
+	var wg sync.WaitGroup
+	var wgT sync.WaitGroup
+	var vCache []string
+	recursiveFlag := false
+	recursiveChan := make(chan map[string]int, 10)
+	if depth > 1 {
+		recursiveFlag = true
 	}
 	go func() {
 		for range interrupt {
@@ -383,13 +399,51 @@ func workerLauncher(ctx context.Context, cancel context.CancelFunc, logger *logg
 		}
 
 	}()
+	wgT.Add(1)
+	go func() {
+		cache, errc := scanDict(ctx, dict, keywords, sizeP, recursiveFlag)
+		err := <-errc
+		if err != nil {
+			logger.logger.Fatalln(err)
+		}
+		vCache = cache
+		wgT.Done()
+	}()
+	wgT.Wait()
+	for grNum := 0; grNum < power; grNum++ {
+		wg.Add(1)
+		go requestWorker(ctx, logger, &wg, url, keywords, extensions, depth, responses, recursiveChan, tSizeP)
+	}
+	go func() {
+		for recursive := range recursiveChan {
+			ch := make(chan string, 100)
+			go sliceToChan(vCache, ch)
+			for urlI, depth := range recursive {
+				wgT.Add(1)
+				go requestWorker(ctx, logger, &wgT, urlI, ch, extensions, depth, responses, recursiveChan, tSizeP)
+			}
+		}
+	}()
 	go func() {
 		wg.Wait()
+		wgT.Wait()
 		close(responses)
+		close(recursiveChan)
 	}()
 }
 
-func bruteWebSite(url string, dict string, extensions []string, method string, power int, protocol string, verbose bool, w io.Writer) bool {
+// To be edited
+type Params struct {
+	logger    *loggerCust
+	w         io.Writer
+	url       string
+	keywords  chan string
+	dict      string
+	power     int
+	responses chan Response
+}
+
+func bruteWebSite(url string, dict string, extensions []string, method string, power int, recursive int, protocol string, verbose bool, w io.Writer) bool {
 	power *= 10
 	responses := make(chan Response, 5)
 	keywords := make(chan string, 50)
@@ -400,7 +454,6 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 	var sizeP *int64
 	sizeP = &size
 	tSizeP = &tSize
-
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
@@ -412,7 +465,7 @@ func bruteWebSite(url string, dict string, extensions []string, method string, p
 
 	logger.createLogger(url)
 	url = addHTTPHTTPSProtocols(url, protocol)
-	workerLauncher(ctx, cancel, &logger, w, url, keywords, dict, power, responses, sizeP, tSizeP, interrupt)
+	workerLauncher(ctx, cancel, &logger, w, url, keywords, dict, power, recursive, responses, sizeP, tSizeP, interrupt)
 
 	go loader(500)
 
