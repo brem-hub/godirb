@@ -2,9 +2,6 @@
 
 
 ## Website bruteforce using Godirb is fast, pure and cool!
-<img src="https://ibb.co/PWQ399y"
-width="500"
-/>
 Do you play CTF or pentest websites and you need to bruteforce directories?
 Are you tired of waiting when dirsearch finishes?
 
