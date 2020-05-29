@@ -38,7 +38,7 @@ __ADDITIONAL__
     godirb -t         -- specify time delay between requests. Use if connection is poor
     godirb -v         -- show all requests
 ## WORDLIST CREATION
-If you want to create your own wordlist you have to follow some rules
+If you want to create your own wordlist you have to follow the pattern
 - one keyword per line
 - if you want to use extensions like test.txt\test.php you have to add %EXT%
 ### Example
@@ -48,5 +48,8 @@ If you want to create your own wordlist you have to follow some rules
     with_ext%EXT%
     long/shot
     long%EXT%/shot
-    
+### Credits
+This is an educational project for MSHP Golang course 2020.
+
+Student: Kulikov Bogdan
 
