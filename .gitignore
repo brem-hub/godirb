@@ -1,4 +1,4 @@
 fastlaunch.sh
 test.go
 .vscode/
-log/
+log/*
